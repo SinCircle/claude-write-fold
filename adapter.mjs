@@ -3,8 +3,8 @@
 import fs from 'node:fs';
 import {parse, tokenizer} from './vendor/acorn.mjs';
 
-export const revision = '5-preview-visibility';
-const marker = '/* write-fold:5-preview-visibility */';
+export const revision = '6-active-indicator';
+const marker = '/* write-fold:6-active-indicator */';
 const options = {ecmaVersion:'latest',sourceType:'module'};
 function insist(ok,message){if(!ok)throw new Error(message);}
 function walk(node,fn){
@@ -145,18 +145,33 @@ export function adaptRenderer(source){
   insist(memo.length===1,'live-detail memo boundary changed');
   const result=ed.match('e(qd,{param:h,message:d,lookups:v,progressMessagesForMessage:f,style:b,tools:g,verbose:M,width:G,isTranscriptMode:B})','e qd h d v f b g M G B').b;
   const dot=ed.match('lo=M?e(xo,{shouldAnimate:!0,isUnresolved:!0,isError:ae||!1}):e(s,{minWidth:2})','lo M e xo ae s',fn,{M});
+  const indicators=ed.functions.filter(n=>n.type==='FunctionDeclaration'&&n.id?.name===dot.b.xo);
+  insist(indicators.length===1,'native indicator definition changed');
+  const indicator=indicators[0],parameters=indicator.params[0];
+  insist(indicator.params.length===1&&parameters.type==='ObjectPattern'&&parameters.properties.length>0,'native indicator props changed');
+  const blink=ed.match('let f=nt(),h=ip(),[M,T]=hy(g&&!f&&!h)','f nt h ip M T hy g',indicator);
+  const refs=[];
+  walk(indicator.body,n=>{if(n.type==='Property'&&!n.computed&&n.key.name==='ref'&&n.value.type==='Identifier'&&n.value.name===blink.b.M)refs.push(n.value);});
+  insist(refs.length===1,'native indicator visibility ref changed');
+  // The native clock consumes visibility from the previous layout commit. A
+  // preview can hide the indicator, then make it visible in the next commit
+  // just as the stale value unsubscribes its only animation source. Keep the
+  // single active file-preview group subscribed by leaving its visibility ref
+  // unattached. The original clock, focus, reduced-motion and error logic run
+  // unchanged; every other indicator keeps its native viewport optimization.
+  const lastProperty=parameters.properties.at(-1);
+  ed.add(lastProperty.end,lastProperty.end,',__wfLiveGroup=!1','Add an opt-in visibility policy for the active file-preview group');
+  ed.add(refs[0].start,refs[0].start,'__wfLiveGroup?void 0:','Keep the active file-preview indicator on the native animation clock across layout changes');
   const dotMemos=[];
   walk(fn.body,n=>{
     const alternative=n.type==='IfStatement'?n.alternate?.expression:null;
     if(alternative?.type==='AssignmentExpression'&&alternative.left.type==='Identifier'&&alternative.left.name===dot.b.lo&&n.start<=dot.start&&n.end>=dot.end)dotMemos.push(n);
   });
   insist(dotMemos.length===1&&dotMemos[0].end<memo[0].end,'native indicator memo boundary changed');
-  // A tall preview can put the shared group indicator outside the viewport.
-  // Its native visibility hook unsubscribes from animation while hidden, and
-  // the memoized element otherwise survives when the next tool shrinks the row.
-  // Re-key only that native indicator at tool handoff; preserve type and props,
-  // and leave the native visibility, focus, error and 600 ms timing code intact.
-  ed.add(dotMemos[0].end,dotMemos[0].end,`let __wfLast=${M}?${Bt}(${d}).at(-1):void 0;if(${M}&&${d}.__wfLatestFileWriteId&&__wfLast)${dot.b.lo}=${dot.b.e}(${dot.b.lo}.type,${dot.b.lo}.props,__wfLast.id);`,'Refresh only the native indicator at tool handoff after a file preview; preserve its type and props');
+  // Re-key at handoff so enabling this policy cannot inherit a stale suspended
+  // hook from before the first file preview. Preserve the native component and
+  // all of its original props, adding only the opt-in policy above.
+  ed.add(dotMemos[0].end,dotMemos[0].end,`let __wfLast=${M}?${Bt}(${d}).at(-1):void 0;if(${M}&&${d}.__wfLatestFileWriteId&&__wfLast)${dot.b.lo}=${dot.b.e}(${dot.b.lo}.type,{...${dot.b.lo}.props,__wfLiveGroup:!0},__wfLast.id);`,'Enable stable visibility only for the active file-preview group and refresh at tool handoff');
   const helper=`${marker}function __writeFoldPreview(m){let{content:d,tools:h,lookups:b,columns:K}=m,p=b.progressMessagesByToolUseID.get(d.id)??[],u=b.toolResultByToolUseID.get(d.id),t=u?.type==="user"?u.message.content.find(v=>v.type==="tool_result"&&v.tool_use_id===d.id):void 0;return t?${result.e}(${result.qd},{param:t,message:u,lookups:b,progressMessagesForMessage:p,tools:h,verbose:!1,width:Math.max(1,K-5),isTranscriptMode:!1}):m.fallback}`;
   ed.add(fn.start,fn.start,helper,'Add a result-preview-only component; no ToolUse title');
   const inject=`if(__wfLast&&__wfLast.id===${d}.__wfLatestFileWriteId&&!${b}.erroredToolUseIDs.has(__wfLast.id)&&!${l3}.isInterruptedCall(${b}.toolResultByToolUseID.get(__wfLast.id)))${Pm}=${result.e}(__writeFoldPreview,{content:__wfLast,tools:${h},lookups:${b},columns:${K},fallback:${Pm}},__wfLast.id);`;

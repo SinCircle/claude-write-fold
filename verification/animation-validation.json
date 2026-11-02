@@ -1,21 +1,81 @@
 {
-  "original-small": {
-    "samples": 162,
-    "duration": 17.021,
-    "changes": 28,
-    "maxInterval": 0.6400000000000006
+  "revision5": {
+    "original-small": {
+      "samples": 162,
+      "duration": 17.021,
+      "changes": 28,
+      "maxInterval": 0.6400000000000006
+    },
+    "patched-small": {
+      "samples": 162,
+      "duration": 17.06,
+      "changes": 0,
+      "maxInterval": 0
+    },
+    "fixed-small": {
+      "samples": 165,
+      "duration": 17.329,
+      "changes": 29,
+      "maxInterval": 0.6400000000000006
+    },
+    "testedCandidateSha256": "e8fc27ea40677e41f157c003bf708e3bcdd58b44ee4deb3eb0cb5f7ba9619962"
   },
-  "patched-small": {
-    "samples": 162,
-    "duration": 17.06,
-    "changes": 0,
-    "maxInterval": 0
-  },
-  "fixed-small": {
-    "samples": 165,
-    "duration": 17.329,
-    "changes": 29,
-    "maxInterval": 0.6400000000000006
-  },
-  "testedCandidateSha256": "e8fc27ea40677e41f157c003bf708e3bcdd58b44ee4deb3eb0cb5f7ba9619962"
+  "revision6": {
+    "testedCandidateSha256": "a1ffe7aa3540fe0e9df354f9eefb6f78b648a93128b98bbe3b2482b9302dcf3d",
+    "nativeVisibilityCacheRaceReproduced": true,
+    "userReportedIntermittentFreezeReproducedInLiveFixture": false,
+    "continuous14Rows": [
+      {
+        "cycle": 0,
+        "samples": 84,
+        "duration": 10.3,
+        "transitions": 17
+      },
+      {
+        "cycle": 1,
+        "samples": 71,
+        "duration": 8.667,
+        "transitions": 15
+      },
+      {
+        "cycle": 2,
+        "samples": 70,
+        "duration": 8.554,
+        "transitions": 13
+      },
+      {
+        "cycle": 3,
+        "samples": 71,
+        "duration": 8.685,
+        "transitions": 14
+      }
+    ],
+    "nativeMotionGuards": [
+      {
+        "name": "focused",
+        "transitions": 4
+      },
+      {
+        "name": "unfocused",
+        "transitions": 0
+      },
+      {
+        "name": "focused-again",
+        "transitions": 4
+      },
+      {
+        "name": "reduced-motion",
+        "transitions": 0
+      },
+      {
+        "name": "motion-restored",
+        "transitions": 3
+      }
+    ],
+    "nativeIndicatorStateComparisonsPerVersion": 256,
+    "structuralProfilesTested": [
+      "2.1.311",
+      "2.1.316"
+    ]
+  }
 }
