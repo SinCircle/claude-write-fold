@@ -1,0 +1,21 @@
+{
+  "original-small": {
+    "samples": 162,
+    "duration": 17.021,
+    "changes": 28,
+    "maxInterval": 0.6400000000000006
+  },
+  "patched-small": {
+    "samples": 162,
+    "duration": 17.06,
+    "changes": 0,
+    "maxInterval": 0
+  },
+  "fixed-small": {
+    "samples": 165,
+    "duration": 17.329,
+    "changes": 29,
+    "maxInterval": 0.6400000000000006
+  },
+  "testedCandidateSha256": "e8fc27ea40677e41f157c003bf708e3bcdd58b44ee4deb3eb0cb5f7ba9619962"
+}

@@ -1,0 +1,23 @@
+# Locally generated Claude binaries, extracted sources and reports
+backup_org/
+versions/
+.build-*/
+*.exe
+*.exe.*
+*.tmp
+current.json
+install.json
+last-error.txt
+verification/*
+!verification/animation-validation.json
+preview.png
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
+.env
+.env.*
+*.key
+*.pem
+*.log
+.claude/
