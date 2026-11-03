@@ -89,7 +89,7 @@ def graph_info(raw):
 
 
 def select_modules(info):
-    candidates = {'grouping': [], 'renderer': [], 'focus': []}
+    candidates = {'grouping': [], 'renderer': [], 'focus': [], 'clock': []}
     for module in info['modules']:
         f = module['fields']
         source = info['graph'][f[2]:f[2]+f[3]]
@@ -101,11 +101,13 @@ def select_modules(info):
             candidates['renderer'].append(module)
         if all(word in source for word in (b'isActiveCollapsedGroup', b'isFocusedTurnLoading', b'hasDisplayedStreamingText', b'focused.inProgressToolUseIDs')):
             candidates['focus'].append(module)
+        if all(word in source for word in (b'subscribeKeepAlive', b'isVisible:', b'subscribeLayout', b'getComputedHeight', b'Math.ceil(')):
+            candidates['clock'].append(module)
     for kind, hits in candidates.items():
         require(len(hits) == 1, f'Cannot uniquely identify the {kind} module ({len(hits)} matches). Upstream structure needs adaptation.')
         require(hits[0]['fields'][-3] == 1, f'{kind} is no longer a supported JavaScript module.')
     selected = {kind: hits[0] for kind, hits in candidates.items()}
-    require(len({m['index'] for m in selected.values()}) == len(selected), 'Module structure changed: expected separate grouping, renderer and focus modules.')
+    require(len({m['index'] for m in selected.values()}) == len(selected), 'Module structure changed: expected separate grouping, renderer, focus and clock modules.')
     return selected
 
 

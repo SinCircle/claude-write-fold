@@ -77,5 +77,109 @@
       "2.1.311",
       "2.1.316"
     ]
+  },
+  "revision11": {
+    "testedCandidateSha256": "a43e884e5a20d66083120ba8b530dbda9b595cd7746e2d48323a010364c7924c",
+    "runtimeVersion": "2.1.316",
+    "scenario": "Read and tall Bash output, ongoing loopback HTTP request, 70 columns, 14 to 7 to 14 rows, mouse expand and collapse",
+    "baselineWithDiagnosticLogging": [
+      {
+        "phase": "collapsed-before",
+        "samples": 39,
+        "transitions": 7
+      },
+      {
+        "phase": "collapsed-after-layout",
+        "samples": 58,
+        "transitions": 0
+      },
+      {
+        "phase": "clicked",
+        "samples": 49,
+        "transitions": 8
+      },
+      {
+        "phase": "collapsed-again",
+        "samples": 49,
+        "transitions": 1
+      }
+    ],
+    "rootFixWithDiagnosticLogging": [
+      {
+        "phase": "collapsed-before",
+        "samples": 39,
+        "transitions": 7
+      },
+      {
+        "phase": "collapsed-after-layout",
+        "samples": 58,
+        "transitions": 9
+      },
+      {
+        "phase": "clicked",
+        "samples": 49,
+        "transitions": 9
+      },
+      {
+        "phase": "collapsed-again",
+        "samples": 49,
+        "transitions": 8
+      }
+    ],
+    "releaseCandidateWithoutDiagnosticLogging": [
+      {
+        "phase": "collapsed-before",
+        "samples": 39,
+        "transitions": 6
+      },
+      {
+        "phase": "collapsed-after-layout",
+        "samples": 58,
+        "transitions": 10
+      },
+      {
+        "phase": "clicked",
+        "samples": 49,
+        "transitions": 9
+      },
+      {
+        "phase": "collapsed-again",
+        "samples": 49,
+        "transitions": 9
+      }
+    ],
+    "allObservedPhasesStillRunning": true,
+    "visibleAfterUnsubscribeObservedInNativeTrace": true,
+    "nativeMotionGuards": [
+      {
+        "name": "focused",
+        "transitions": 4
+      },
+      {
+        "name": "unfocused",
+        "transitions": 0
+      },
+      {
+        "name": "focused-again",
+        "transitions": 3
+      },
+      {
+        "name": "reduced-motion",
+        "transitions": 0
+      },
+      {
+        "name": "motion-restored",
+        "transitions": 3
+      }
+    ],
+    "nativeIndicatorByteIdentical": true,
+    "removedVisibilityBypass": true,
+    "removedIndicatorRemountKey": true,
+    "nativeIndicatorStateComparisonsPerVersion": 128,
+    "structuralProfilesTested": [
+      "2.1.311",
+      "2.1.316"
+    ],
+    "exactUserScreenshotTriggerCaptured": false
   }
 }

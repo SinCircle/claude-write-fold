@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {parse,tokenizer} from '../vendor/acorn.mjs';
-import {adaptGrouping,adaptRenderer,adaptFocusedLoading} from '../adapter.mjs';
+import {adaptGrouping,adaptRenderer,adaptFocusedLoading,adaptAnimationClock} from '../adapter.mjs';
 
 const options={ecmaVersion:'latest',sourceType:'module'};
 function walk(n,fn){if(!n||typeof n!=='object')return;if(n.type)fn(n);for(const v of Object.values(n)){if(Array.isArray(v))for(const c of v)walk(c,fn);else if(v&&typeof v==='object')walk(v,fn)}}
@@ -35,17 +35,23 @@ function renameBindings(source){
   parse(source,options);return source;
 }
 
-assert(process.argv[2] && process.argv[3] && process.argv[4], 'Pass grouping, renderer and focus source paths.');
-const group=fs.readFileSync(process.argv[2],'utf8'),render=fs.readFileSync(process.argv[3],'utf8'),focus=fs.readFileSync(process.argv[4],'utf8');
+assert(process.argv[2] && process.argv[3] && process.argv[4] && process.argv[5], 'Pass grouping, renderer, focus and clock source paths.');
+const group=fs.readFileSync(process.argv[2],'utf8'),render=fs.readFileSync(process.argv[3],'utf8'),focus=fs.readFileSync(process.argv[4],'utf8'),clock=fs.readFileSync(process.argv[5],'utf8');
 const profile=group.includes('workshopEditsByToolUseId')?'workshop':'popOutOnErrorIds';
 const changedGroup=adaptGrouping(renameBindings(group));
 assert.equal(changedGroup.changes.length,11);global.gc?.();
 console.log('PASS: '+profile+' grouping adapts to renamed identifiers and whitespace');
 const changedRenderer=adaptRenderer(renameBindings(render));
-assert.equal(changedRenderer.changes.length,8);
+assert.equal(changedRenderer.changes.length,5);
 assert(changedRenderer.changes.every(c=>c.before===''));
 assert(changedRenderer.nativeRendererUnchanged);global.gc?.();
-console.log('PASS: preview and indicator adapt while preserving native renderer bytes');
+console.log('PASS: preview adapts while preserving native renderer bytes');
+const changedClock=adaptAnimationClock(renameBindings(clock));
+assert.equal(changedClock.changes.length,3);
+assert(changedClock.changes.every(c=>c.before===''));
+assert.throws(()=>adaptAnimationClock(changedClock.source),/already patched/);
+assert.throws(()=>adaptAnimationClock(clock.replaceAll('subscribeLayout','upstreamChangedLayout')),/got 0/);
+console.log('PASS: animation visibility reuses the native layout hook; unchanged native code and strict structural checks');
 const changedFocus=adaptFocusedLoading(renameBindings(focus));
 assert.equal(changedFocus.changes.length,3);
 assert(changedFocus.changes.every(c=>c.before===''));
@@ -83,13 +89,14 @@ assert.throws(()=>adaptRenderer(render.replaceAll('isActiveGroup','changedUpstre
 console.log('PASS: duplicate patches, ambiguous matches and structural drift are rejected');
 
 // Compare the actual native and patched indicator output over animation,
-// reduced-motion, static-frame, error and completion states. The only allowed
-// difference is the visibility ref when the group explicitly opts in.
+// reduced-motion, static-frame, error and completion states. The indicator is
+// now byte-identical to upstream: no special prop, ref policy or remount key.
 const patched=adaptRenderer(render).source;
 const patchedAst=parse(patched,options),nativeAst=parse(render,options);
-const indicator=patchedAst.body.find(n=>n.type==='FunctionDeclaration'&&n.params[0]?.type==='ObjectPattern'&&n.params[0].properties.some(p=>p.key?.name==='__wfLiveGroup'));
-assert(indicator);
+const indicator=patchedAst.body.find(n=>n.type==='FunctionDeclaration'&&n.params[0]?.type==='ObjectPattern'&&n.params[0].properties.some(p=>p.key?.name==='isUnresolved')&&n.params[0].properties.some(p=>p.key?.name==='shouldAnimate'));
+assert(indicator);assert(!patched.includes('__wfLiveGroup'));
 const original=nativeAst.body.find(n=>n.type==='FunctionDeclaration'&&n.id.name===indicator.id.name);
+assert.equal(patched.slice(indicator.start,indicator.end),render.slice(original.start,original.end));
 const declarations=original.body.body[0].declarations;
 assert.equal(declarations.length,6);
 const sequence=original.body.body.at(-1).argument;
@@ -120,14 +127,12 @@ for(let flags=0;flags<128;flags++){
   const props={isError:!!(flags&1),isNeutral:!!(flags&2),isUnresolved:!!(flags&4),shouldAnimate:!!(flags&8)};
   const environment=[!!(flags&16),!!(flags&32),!!(flags&64)];
   const before=renderIndicator(original,render,props,...environment);
-  for(const optIn of [false,true]){
-    const after=renderIndicator(indicator,patched,{...props,__wfLiveGroup:optIn},...environment);
-    assert.equal(after.tree.props.ref,optIn?undefined:visibilityRef);
-    assert.equal(after.animationEnabled,before.animationEnabled);
-    assert.equal(JSON.stringify(after.tree),JSON.stringify(before.tree));
-  }
+  const after=renderIndicator(indicator,patched,props,...environment);
+  assert.equal(after.tree.props.ref,visibilityRef);
+  assert.equal(after.animationEnabled,before.animationEnabled);
+  assert.equal(JSON.stringify(after.tree),JSON.stringify(before.tree));
 }
-console.log('PASS: 256 indicator states preserve native output and motion guards; only opted-in visibility changes');
+console.log('PASS: native indicator is byte-identical; 128 states preserve output, visibility ref and motion guards');
 
 // Exercise the exact injected notification parser against native envelopes.
 // Any ambiguity must leave the standalone notification visible.
