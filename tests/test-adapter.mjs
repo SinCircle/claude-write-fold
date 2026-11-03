@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {parse,tokenizer} from '../vendor/acorn.mjs';
-import {adaptGrouping,adaptRenderer} from '../adapter.mjs';
+import {adaptGrouping,adaptRenderer,adaptFocusedLoading} from '../adapter.mjs';
 
 const options={ecmaVersion:'latest',sourceType:'module'};
 function walk(n,fn){if(!n||typeof n!=='object')return;if(n.type)fn(n);for(const v of Object.values(n)){if(Array.isArray(v))for(const c of v)walk(c,fn);else if(v&&typeof v==='object')walk(v,fn)}}
@@ -35,8 +35,8 @@ function renameBindings(source){
   parse(source,options);return source;
 }
 
-assert(process.argv[2] && process.argv[3], 'Pass grouping and renderer source paths.');
-const group=fs.readFileSync(process.argv[2],'utf8'),render=fs.readFileSync(process.argv[3],'utf8');
+assert(process.argv[2] && process.argv[3] && process.argv[4], 'Pass grouping, renderer and focus source paths.');
+const group=fs.readFileSync(process.argv[2],'utf8'),render=fs.readFileSync(process.argv[3],'utf8'),focus=fs.readFileSync(process.argv[4],'utf8');
 const profile=group.includes('workshopEditsByToolUseId')?'workshop':'popOutOnErrorIds';
 const changedGroup=adaptGrouping(renameBindings(group));
 assert.equal(changedGroup.changes.length,11);global.gc?.();
@@ -46,6 +46,35 @@ assert.equal(changedRenderer.changes.length,8);
 assert(changedRenderer.changes.every(c=>c.before===''));
 assert(changedRenderer.nativeRendererUnchanged);global.gc?.();
 console.log('PASS: preview and indicator adapt while preserving native renderer bytes');
+const changedFocus=adaptFocusedLoading(renameBindings(focus));
+assert.equal(changedFocus.changes.length,3);
+assert(changedFocus.changes.every(c=>c.before===''));
+assert.throws(()=>adaptFocusedLoading(changedFocus.source),/already patched/);
+assert.throws(()=>adaptFocusedLoading(focus.replaceAll('focused.inProgressToolUseIDs','focused.upstreamChangedIDs')),/got 0/);
+console.log('PASS: focused-loading adapter preserves native code and rejects unsupported upstream changes');
+// Exercise the actual injected routing and native brief-loading expression.
+// Tool gaps must use the focused agent flag; main/static views stay unchanged.
+const focusPatch=adaptFocusedLoading(focus),focusAst=parse(focusPatch.source,options);
+const routing=focusPatch.changes[0].after;
+const routeNames=routing.match(/if\((\w+)\.kind==="live"&&!\1\.focused.isMain\)(\w+)=\1\.focused.isLoading;/);
+assert(routeNames);
+const loadingNodes=[];
+walk(focusAst,node=>{if(node.type==='VariableDeclarator'&&node.init?.type==='ConditionalExpression'&&focusPatch.source.slice(node.init.start,node.init.end).includes('.focused.inProgressToolUseIDs.size>0||'))loadingNodes.push(node)});
+assert.equal(loadingNodes.length,1);
+const loadingExpr=loadingNodes[0].init,mainName=loadingExpr.test.name;
+const foldedName=loadingExpr.consequent.right.argument.name;
+for(const mainBusy of [false,true])for(const focusedBusy of [false,true])for(const isMain of [false,true])for(const kind of ['live','static'])for(const executing of [false,true]){
+  const context={
+    [routeNames[1]]:{kind,focused:{isMain,isLoading:focusedBusy,inProgressToolUseIDs:new Set(executing?['tool']:[])}},
+    [routeNames[2]]:mainBusy,[mainName]:kind==='live'&&isMain,[foldedName]:false,
+  };
+  vm.createContext(context);vm.runInContext(routing,context);
+  const expected=kind==='live'&&!isMain?focusedBusy:mainBusy;
+  assert.equal(context[routeNames[2]],expected);
+  const brief=vm.runInContext(focusPatch.source.slice(loadingExpr.start,loadingExpr.end),context);
+  assert.equal(brief,kind==='live'?(isMain?mainBusy:executing||focusedBusy):false);
+}
+console.log('PASS: 32 focused-loading states keep running agents active between tools and preserve main/static views');
 assert.throws(()=>adaptGrouping(changedGroup.source),/already patched/);
 assert.throws(()=>adaptRenderer(changedRenderer.source),/already patched/);global.gc?.();
 assert.throws(()=>adaptGrouping(group+'\nfunction fake(y){if(!y?.isSearchOrReadCommand)return{isCollapsible:!1};}'),/got 2/);

@@ -3,7 +3,8 @@
 import fs from 'node:fs';
 import {parse, tokenizer} from './vendor/acorn.mjs';
 
-export const revision = '8-background-failure';
+export const revision = '10-focused-state';
+// Keep the existing grouping/renderer output byte-identical to v0.1.3.
 const marker = '/* write-fold:8-background-failure */';
 const options = {ecmaVersion:'latest',sourceType:'module'};
 function insist(ok,message){if(!ok)throw new Error(message);}
@@ -159,6 +160,27 @@ function adaptGroupingModern(source){
   return ed.finish();
 }
 
+// The native focused-conversation projection already supplies isLoading for
+// running, non-idle agents. Feed it into the existing group/brief predicates;
+// the upstream indicator, task title and detail components need no new rules.
+export function adaptFocusedLoading(source){
+  const ed=new Editor(source,'focused-loading');
+  const context=ed.match('D=T.kind==="live"?T.turn:null,L=T.kind==="live"&&T.focused.isMain','D T L');
+  const fn=ed.fn(context.start),{D,T,L}=context.b;
+  const load=ed.match('G=Oe(D,mL)??!1','G Oe D mL',fn,{D}),G=load.b.G;
+  const focused=ed.match('Yt=L?G&&!st:T.kind==="live"&&T.focused.inProgressToolUseIDs.size>0','Yt L G st T',fn,{L,G,T});
+  const declarations=[];
+  walk(fn.body,node=>{if(node.type==='VariableDeclaration'&&node.start<focused.start&&node.end>focused.end)declarations.push(node)});
+  insist(declarations.length===1,'focused loading declaration boundary changed');
+  ed.add(declarations[0].start,declarations[0].start,`/* write-fold:10-focused-state */if(${T}.kind==="live"&&!${T}.focused.isMain)${G}=${T}.focused.isLoading;`,'Use native focused loading for the viewed subagent, including gaps between tools');
+  const activeTools=ed.match('T.focused.inProgressToolUseIDs.size>0','T',focused,{T});
+  ed.add(activeTools.start,activeTools.start,'(','Preserve the native in-progress-tools condition');
+  ed.add(activeTools.end,activeTools.end,`||${T}.focused.isLoading)`,'Use the same native focused loading in brief-mode grouping');
+  const result=ed.finish();
+  insist(ed.edits.every(e=>e.start===e.end),'Native focused loading logic was overwritten');
+  return result;
+}
+
 export function adaptRenderer(source){
   const ed=new Editor(source,'renderer');
   const args=ed.match('{message:d,inProgressToolUseIDs:c,shouldAnimate:g,verbose:f,tools:h,lookups:b,isActiveGroup:M,addMargin:C}=m','d c g f h b M C m');
@@ -223,7 +245,9 @@ if(process.argv[1]&&import.meta.url===new URL('file:///'+process.argv[1].replace
     const prepared=[];
     for(const entry of manifest.modules){
       const before=fs.readFileSync(entry.input,'utf8');
-      const result=entry.kind==='grouping'?adaptGrouping(before):adaptRenderer(before);
+      const adapt={grouping:adaptGrouping,renderer:adaptRenderer,focus:adaptFocusedLoading}[entry.kind];
+      insist(adapt,'Unknown module kind: '+entry.kind);
+      const result=adapt(before);
       prepared.push([entry,result]);report.modules.push({kind:entry.kind,changes:result.changes,nativeRendererUnchanged:result.nativeRendererUnchanged??null});
     }
     for(const [entry,result] of prepared)fs.writeFileSync(entry.output,result.source);

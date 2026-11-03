@@ -22,7 +22,7 @@ def main():
     selected = inject.select_modules(info)
     with tempfile.TemporaryDirectory(prefix='write-fold-tests-') as directory:
         inputs = []
-        for kind in ('grouping', 'renderer'):
+        for kind in ('grouping', 'renderer', 'focus'):
             fields = selected[kind]['fields']
             target = Path(directory)/(kind+'.mjs')
             target.write_bytes(info['graph'][fields[2]:fields[2]+fields[3]])
