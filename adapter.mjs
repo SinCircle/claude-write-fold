@@ -3,8 +3,8 @@
 import fs from 'node:fs';
 import {parse, tokenizer} from './vendor/acorn.mjs';
 
-export const revision = '6-active-indicator';
-const marker = '/* write-fold:6-active-indicator */';
+export const revision = '7-background-completion';
+const marker = '/* write-fold:7-background-completion */';
 const options = {ecmaVersion:'latest',sourceType:'module'};
 function insist(ok,message){if(!ok)throw new Error(message);}
 function walk(node,fn){
@@ -60,6 +60,37 @@ class Editor {
   }
 }
 
+// Accept only the native successful shell-task envelope. Unknown formats and
+// nonzero exits remain standalone. Both modules use the same parser; messages
+// themselves stay untouched for transcript expansion and session persistence.
+const backgroundParser = String.raw`function __wfBackgroundTask(m){if(m?.type!=="attachment")return;let a=m.attachment;if(a?.type!=="queued_command"||a.commandMode!=="task-notification"||a.origin?.kind!=="task-notification"||typeof a.prompt!=="string")return;let p=a.prompt.trim().match(/^<task-notification>\s*<task-id>([\w-]+)<\/task-id>\s*<tool-use-id>([\w-]+)<\/tool-use-id>\s*<output-file>[^\r\n]+<\/output-file>\s*<status>completed<\/status>\s*<summary>Background command "[^\r\n]*" completed \(exit code 0\)<\/summary>\s*<\/task-notification>$/);if(p)return{taskId:p[1],toolUseId:p[2]}}`;
+
+function addBackgroundGrouping(ed){
+  const hit=ed.match('else if(i1o(Oe)||Ge!==void 0&&BWt(Ge.message))','i1o Oe Ge BWt');
+  const fn=ed.fn(hit.start),message=hit.b.Oe;
+  const state=ed.match('z.bashCommands?.set(pt,nt)','z pt nt',fn).b.z;
+  ed.add(fn.start,fn.start,backgroundParser,'Recognize only successful native background shell notifications');
+  ed.add(hit.start,hit.start,`else if(${state}.bashCommands?.has(__wfBackgroundTask(${message})?.toolUseId)){${state}.__wfBackgroundTasks??=[];${state}.__wfBackgroundTasks.push(${message});}`,'Absorb completion only when its original command belongs to this group');
+  const flush=ed.match('if(n){if((e.bashCount??0)>0)Q.bashCount=','n e Q');
+  ed.add(flush.start,flush.start,`if(${flush.b.e}.__wfBackgroundTasks?.length)${flush.b.Q}.__wfBackgroundTasks=${flush.b.e}.__wfBackgroundTasks;`,'Carry original notifications separately from native tool messages');
+  const merge=ed.match('e.latestThinkingSummary=n.latestThinkingSummary??e.latestThinkingSummary,e.messages.push(...n.messages)','e n');
+  ed.add(merge.end,merge.end,`;if(${merge.b.n}.__wfBackgroundTasks?.length)${merge.b.e}.__wfBackgroundTasks=[...${merge.b.e}.__wfBackgroundTasks??[],...${merge.b.n}.__wfBackgroundTasks]`,'Preserve attached notifications when native brief mode merges groups');
+}
+
+function addBackgroundRenderer(ed,fn,message){
+  const bash=ed.match('if(b&&Co>0)eo("bash",T?"running":"ran",r(n,{children:[e(n,{bold:!0,children:Co})," shell"," ",Co===1?"command":"commands"]}));','b Co eo T r n e',fn);
+  const {eo,r,n,e}=bash.b;
+  ed.add(fn.start,fn.start,backgroundParser,'Recognize preserved background completions in group messages');
+  ed.add(bash.end,bash.end,`let __wfDone=new Set((${message}.__wfBackgroundTasks??[]).map(__wfBackgroundTask).filter(Boolean).map(v=>v.taskId)).size;if(__wfDone>0)${eo}("wf-background","completed",${r}(${n},{children:[${e}(${n},{bold:!0,children:__wfDone})," background ",__wfDone===1?"task":"tasks"]}));`,'Append completed background-task count using the native summary formatter');
+  const attachment=ed.fn(ed.match('case"queued_command":').start);
+  insist(attachment.type==='FunctionDeclaration','attachment renderer is no longer a named function');
+  const transcript=ed.match('li=V.map(Ne)','li V Ne',fn),rows=transcript.b.li;
+  const memo=[];
+  walk(fn.body,node=>{if(node.type==='IfStatement'&&node.start<transcript.start&&node.end>transcript.end&&node.alternate?.expression?.left?.name===rows)memo.push(node)});
+  insist(memo.length===1,'expanded notification row boundary changed');
+  ed.add(memo[0].end,memo[0].end,`if(${message}.__wfBackgroundTasks?.length)${rows}=[...${rows},...${message}.__wfBackgroundTasks.map(v=>${e}(${attachment.id.name},{attachment:v.attachment,addMargin:!0,verbose:!0,isTranscriptMode:!0,messageId:v.uuid},v.uuid))];`,'Render preserved notifications with the native attachment renderer when expanded');
+}
+
 export function adaptGrouping(source){
   if(!source.includes('workshopEditsByToolUseId'))return adaptGroupingModern(source);
   const ed=new Editor(source,'grouping');
@@ -91,6 +122,7 @@ export function adaptGrouping(source){
   const errFn=ed.fn(hit.start),changed=ed.match(',r=!0}return r}','r',errFn).b.r;
   const {h,n}=hit.b;
   ed.replace(hit,`if(!${h}||${h}.spent)continue;if(${h}.__wfFileWrite){${h}.spent=!0;${n}.editFileCount=Math.max(0,(${n}.editFileCount??0)-${h}.count);${n}.linesAdded=Math.max(0,(${n}.linesAdded??0)-${h}.added);${n}.linesRemoved=Math.max(0,(${n}.linesRemoved??0)-${h}.removed);${changed}=!0;continue}${h}.spent=!0,${n}.workshopWriteCount=`,'Preserve native failed/interrupted-operation pop-out');
+  addBackgroundGrouping(ed);
   return ed.finish();
 }
 
@@ -123,6 +155,7 @@ function adaptGroupingModern(source){
   const classifyRow=ed.match('let We=W2n(Oe)?Opt(Oe,n):null,Ge=We===null?j2n(Oe):void 0,lt=We===null?Xvs(Oe,z):V2n;','We W2n Oe Opt n Ge j2n lt Xvs z V2n',groupFn,{We:je,z});
   const message=classifyRow.b.Oe;
   ed.add(classifyRow.end,classifyRow.end,`if(${message}.type==="user"&&${z}.__wfEditsById)for(let __wfResult of ${message}.message.content){if(__wfResult.type!=="tool_result"||!__wfResult.is_error)continue;let __wfEdit=${z}.__wfEditsById.get(__wfResult.tool_use_id);if(!__wfEdit||__wfEdit.spent)continue;__wfEdit.spent=!0;${z}.editFileCount=Math.max(0,(${z}.editFileCount??0)-__wfEdit.count);${z}.linesAdded=Math.max(0,(${z}.linesAdded??0)-__wfEdit.added);${z}.linesRemoved=Math.max(0,(${z}.linesRemoved??0)-__wfEdit.removed);}`,'Remove failed-write counts before the native error branch runs');
+  addBackgroundGrouping(ed);
   return ed.finish();
 }
 
@@ -176,6 +209,7 @@ export function adaptRenderer(source){
   ed.add(fn.start,fn.start,helper,'Add a result-preview-only component; no ToolUse title');
   const inject=`if(__wfLast&&__wfLast.id===${d}.__wfLatestFileWriteId&&!${b}.erroredToolUseIDs.has(__wfLast.id)&&!${l3}.isInterruptedCall(${b}.toolResultByToolUseID.get(__wfLast.id)))${Pm}=${result.e}(__writeFoldPreview,{content:__wfLast,tools:${h},lookups:${b},columns:${K},fallback:${Pm}},__wfLast.id);`;
   ed.add(memo[0].end,memo[0].end,inject,'Replace only active detail content; preserve every native title expression');
+  addBackgroundRenderer(ed,fn,d);
   const output=ed.finish();
   // All renderer changes are insertions. All upstream renderer bytes survive.
   insist(ed.edits.every(e=>e.start===e.end),'Native renderer was overwritten');

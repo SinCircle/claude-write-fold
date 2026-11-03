@@ -7,7 +7,7 @@
 - 主程序：用户目录下的 `.local/bin/claude.exe`。测试机器上 PowerShell 的 `claude` 命令解析到此文件。
 - 最新未修改原版：`backup_org/claude-2.1.316-e896a9d8da51.exe`。
 - 原版 SHA-256：`e896a9d8da519353a49bf69ca4a695ba7e09067752687c675b3969041e632d52`。
-- 当前补丁 SHA-256（修订 6）：`a1ffe7aa3540fe0e9df354f9eefb6f78b648a93128b98bbe3b2482b9302dcf3d`。
+- 当前补丁 SHA-256（修订 7）：`0c3483e01cb53ea2ce845051010d58e909adce903ccdfaef7d91c17aa0548fa7`。
 - 升级前的 2.1.311 原版也保存在 `backup_org`。
 
 ## 已验证
@@ -48,3 +48,19 @@
 - 汇总数据在 `verification/animation-validation.json`。终端帧、日志和提取出的原生代码仍只在本地保留。
 
 官方升级方式参见 [Claude Code setup](https://code.claude.com/docs/en/setup#update-manually)。
+
+## 修订 7：成功后台命令通知合并
+
+2026-11-03，在同一份 2.1.316 原版上验证，未执行官方升级。只接收带任务 ID、工具调用 ID、输出文件、`completed` 状态和退出码 0 的原生后台 shell 通知，并要求原始调用仍属于当前组的 Bash 映射。摘要通过原生计数格式追加 `completed N background task(s)`；命令数不增加，重复投递按任务 ID 去重计数。
+
+原生工具消息列表有多处只接受工具消息的假设。通知保存在组内独立附加字段，原始消息对象不变；普通分组、简略模式合并和展开渲染分别传递此字段。Ctrl+O 的完整记录继续使用原生记录和通知组件。不会跨越已经结束的分组向历史组回填通知。失败、取消、Agent 等其他任务类型、格式不符、归属不明的通知继续单独显示。
+
+验证结果：
+
+- 真实 ConPTY、隔离配置、本地固定响应服务中执行 Read、后台 Bash、前台 Bash、Write。成功场景最终一条摘要为 `edited 1 file +2, read 1 file, ran 2 shell commands, completed 1 background task`，通知没有额外占一行。活动阶段 Write 预览仍可见。
+- Ctrl+O 后，完整的 `Background command "WF_BACKGROUND_SUCCESS" completed (exit code 0)` 通知可见；保存的会话记录仍含任务 ID、工具调用 ID、输出文件、状态和摘要。
+- 后台命令以退出码 7 失败时，失败通知单独显示，并保留前后两个分组；未计入成功完成数。展开后仍可见失败原文。
+- 2.1.311、2.1.316 两套结构的变量改名、空白变化、拒绝条件及每版 256 个圆点状态组合测试通过。通知测试覆盖成功、失败、取消、缺少 ID、附加文本、重复状态、错误来源、错误内容类型、当前组归属和重复计数。
+- 构建仍只改变两个目标模块，版本和帮助输出与原版一致。未调用付费模型；完整终端截图、会话和日志只保留在本地。
+
+真实后台通知界面测试限于 2.1.316；旧版检查和未知格式保留策略不代表覆盖所有后台任务格式。

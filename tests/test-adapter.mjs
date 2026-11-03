@@ -39,10 +39,10 @@ assert(process.argv[2] && process.argv[3], 'Pass grouping and renderer source pa
 const group=fs.readFileSync(process.argv[2],'utf8'),render=fs.readFileSync(process.argv[3],'utf8');
 const profile=group.includes('workshopEditsByToolUseId')?'workshop':'popOutOnErrorIds';
 const changedGroup=adaptGrouping(renameBindings(group));
-assert.equal(changedGroup.changes.length,7);global.gc?.();
+assert.equal(changedGroup.changes.length,11);global.gc?.();
 console.log('PASS: '+profile+' grouping adapts to renamed identifiers and whitespace');
 const changedRenderer=adaptRenderer(renameBindings(render));
-assert.equal(changedRenderer.changes.length,5);
+assert.equal(changedRenderer.changes.length,8);
 assert(changedRenderer.changes.every(c=>c.before===''));
 assert(changedRenderer.nativeRendererUnchanged);global.gc?.();
 console.log('PASS: preview and indicator adapt while preserving native renderer bytes');
@@ -99,3 +99,52 @@ for(let flags=0;flags<128;flags++){
   }
 }
 console.log('PASS: 256 indicator states preserve native output and motion guards; only opted-in visibility changes');
+
+// Exercise the exact injected notification parser against native envelopes.
+// Any ambiguity must leave the standalone notification visible.
+const parserNode=patchedAst.body.find(n=>n.type==='FunctionDeclaration'&&n.id.name==='__wfBackgroundTask');
+assert(parserNode);
+const parserContext={};vm.createContext(parserContext);
+vm.runInContext(patched.slice(parserNode.start,parserNode.end),parserContext);
+function notification(task='task_1',tool='toolu_1'){
+  return {type:'attachment',uuid:'notification_'+task,attachment:{type:'queued_command',commandMode:'task-notification',origin:{kind:'task-notification',producer:'session-task'},prompt:`<task-notification>\n<task-id>${task}</task-id>\n<tool-use-id>${tool}</tool-use-id>\n<output-file>fixture/tasks/${task}.output</output-file>\n<status>completed</status>\n<summary>Background command "Fixture background task" completed (exit code 0)</summary>\n</task-notification>`}};
+}
+const completion=notification(),saved=JSON.stringify(completion);
+assert.equal(parserContext.__wfBackgroundTask(completion).toolUseId,'toolu_1');
+assert.equal(parserContext.__wfBackgroundTask(completion).taskId,'task_1');
+assert.equal(JSON.stringify(completion),saved);
+const invalid=[undefined,null,{}, {type:'user',message:{content:completion.attachment.prompt}}];
+for(const [from,to] of [['<status>completed','<status>failed'],['<status>completed','<status>killed'],['exit code 0','exit code 7'],['Background command','Agent'],['<tool-use-id>toolu_1</tool-use-id>',''],['<task-id>task_1</task-id>',''],['<output-file>fixture/tasks/task_1.output</output-file>',''],['</task-notification>','</task-notification>\nExtra user text'],['<status>completed</status>','<status>completed</status><status>failed</status>']]){
+  const row=notification();row.attachment.prompt=row.attachment.prompt.replace(from,to);invalid.push(row);
+}
+for(const [key,value] of [['commandMode','prompt'],['origin',{kind:'human'}],['prompt',[{type:'text',text:completion.attachment.prompt}]]]){
+  const row=notification();row.attachment[key]=value;invalid.push(row);
+}
+for(const row of invalid)assert.equal(parserContext.__wfBackgroundTask(row),undefined);
+// The exact inserted branch only accepts IDs in the current group's Bash map.
+const backgroundGroup=adaptGrouping(group);
+const branch=backgroundGroup.changes.find(c=>c.reason.startsWith('Absorb completion')).after;
+const binding=branch.match(/else if\((\w+)\.bashCommands\?\.has\(__wfBackgroundTask\((\w+)\)/);
+assert(binding);
+for(const linked of [false,true]){
+  const state={messages:[],bashCommands:new Map(linked?[['toolu_1','fixture command']]:[])};
+  const context={...parserContext,[binding[1]]:state,[binding[2]]:completion};vm.createContext(context);
+  vm.runInContext('if(false){}'+branch,context);
+  assert.equal(state.messages.length,0);
+  assert.equal(state.__wfBackgroundTasks?.length??0,linked?1:0);
+  if(linked)assert.equal(state.__wfBackgroundTasks[0],completion);
+}
+console.log('PASS: successful linked shell completions preserve their original objects; failures, malformed and unrelated notifications stay standalone');
+const summary=adaptRenderer(render).changes.find(c=>c.reason.startsWith('Append completed')).after;
+const messageName=summary.match(/\((\w+)\.__wfBackgroundTasks/)[1];
+const summaryCall=summary.match(/if\(__wfDone>0\)(\w+)\(/)[1];
+const jsx=summary.match(/"completed",(\w+)\((\w+),/);
+const bold=summary.match(/children:\[(\w+)\(/)[1];
+for(const [notifications,expected] of [[[],0],[[completion],1],[[completion,completion],1],[[completion,notification('task_2','toolu_2')],2]]){
+  const calls=[],context={...parserContext,[messageName]:{__wfBackgroundTasks:notifications},[summaryCall]:(...args)=>calls.push(args),[jsx[1]]:(type,props)=>props,[bold]:(type,props)=>props,[jsx[2]]:'text'};
+  vm.createContext(context);
+  assert.equal(vm.runInContext(summary+';__wfDone',context),expected);
+  assert.equal(calls.length,expected?1:0);
+  if(expected)assert.equal(calls[0][2].children[0].children,expected);
+}
+console.log('PASS: native summary formatter receives unique completion counts and adds nothing to ordinary groups');
