@@ -4,6 +4,7 @@ Windows x64 上的 Claude Code 显示补丁：将普通 `Write`、`Edit`、`Note
 
 - Write 保留代码预览，Edit 保留红绿差异，NotebookEdit 保留单元格内容。
 - 标题栏沿用原生逻辑，不额外添加工具标题。
+- 失败的 Write、Update（Edit）、NotebookEdit 也留在合并块中，摘要标红显示 `failed N file operation(s)`；失败项不计入成功修改数和增删行数。活动时复用原生简短错误预览，Ctrl+O 查看完整原因。
 - 后续操作接替或整组结束时预览收起；保留 `Ctrl+O`、错误提示和长内容截断。
 - 修订 11 直接复用原生布局订阅，修正外层圆点可见后未恢复动画订阅的问题。此前绕过可见性测量、重建圆点的临时处理已删除；原生圆点组件、闪烁周期、焦点和减少动画规则保持不变。
 - 修订 8 将成功或失败的后台 shell 通知收进包含原始命令的当前合并块，分别显示 `completed 1 background task` 和 `failed 1 background task`，失败数量标红，不重复增加命令数。Ctrl+O 保留完整通知和退出码；取消、其他任务类型、格式不符或无法对应到当前组的通知保持原样。

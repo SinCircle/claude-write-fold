@@ -42,7 +42,7 @@ const changedGroup=adaptGrouping(renameBindings(group));
 assert.equal(changedGroup.changes.length,11);global.gc?.();
 console.log('PASS: '+profile+' grouping adapts to renamed identifiers and whitespace');
 const changedRenderer=adaptRenderer(renameBindings(render));
-assert.equal(changedRenderer.changes.length,5);
+assert.equal(changedRenderer.changes.length,8);
 assert(changedRenderer.changes.every(c=>c.before===''));
 assert(changedRenderer.nativeRendererUnchanged);global.gc?.();
 console.log('PASS: preview adapts while preserving native renderer bytes');
@@ -189,3 +189,56 @@ for(const [notifications,done,failed] of [[[],0,0],[[completion],1,0],[[completi
   if(failed){const result=calls.find(c=>c[1]==='failed')[2];assert.equal(result.children[0].children,failed);assert.equal(result.color,'error')}
 }
 console.log('PASS: summary distinguishes success/failure, colors failures, deduplicates deliveries and never masks a conflicting failure');
+
+// Exercise per-call rollback with a native grouped-tool row: a failed sibling
+// must not remove the successful sibling's counts or mutate either message.
+const writeBranch=backgroundGroup.changes.find(c=>c.reason.startsWith('Track file calls')).after;
+const writeNames=writeBranch.match(/else if\((\w+)\.__wfFileWrite\)\{(\w+)\.editFileCount=.*?\+(\w+);/);
+const rowName=writeBranch.match(/of \((\w+)\.type/)[1];
+const lineName=writeBranch.match(/let __wfLines=(\w+)\(/)[1];
+const cleanName=writeBranch.match(/latestDisplayHint=(\w+)\(/)[1];
+const rollback=backgroundGroup.changes.find(c=>c.reason.startsWith('Keep file failures')).after;
+let rollbackFunction;
+if(profile==='workshop'){
+  const ast=parse(backgroundGroup.source,options);
+  walk(ast,n=>{if(n.type==='FunctionDeclaration'&&backgroundGroup.source.slice(n.start,n.end).includes('continue}'+rollback.split('continue}')[1]))rollbackFunction=backgroundGroup.source.slice(n.start,n.end)});
+  assert(rollbackFunction);
+}
+for(const grouped of [false,true])for(const denied of [false,true]){
+  const calls=[{type:'tool_use',id:'bad',name:'Edit',input:{added:1,removed:2}}];
+  if(grouped)calls.push({type:'tool_use',id:'good',name:'Edit',input:{added:3,removed:1}});
+  const rows=calls.map(call=>({type:'assistant',message:{content:[call]}}));
+  const row=grouped?{type:'grouped_tool_use',messages:rows}:rows[0],saved=JSON.stringify(row),state={};
+  const context={[writeNames[1]]:{__wfFileWrite:true,toolUseIds:calls.map(c=>c.id),editLines:{added:grouped?4:1,removed:grouped?3:2},name:'Edit',input:{}},[writeNames[2]]:state,[writeNames[3]]:calls.length,[rowName]:row,[lineName]:(name,input)=>input,[cleanName]:v=>v};
+  vm.createContext(context);vm.runInContext('if(false){}'+writeBranch,context);
+  assert.equal(JSON.stringify(row),saved);
+  const failure={type:'user',message:{content:[{type:'tool_result',tool_use_id:'bad',is_error:true}]},...(denied?{toolDenialKind:'permission'}:{})};
+  function fail(message){
+    if(profile==='workshop')return vm.runInNewContext('('+rollbackFunction+')(message,state)',{message,state});
+    const name=rollback.match(/if\((\w+)\.type/)[1];context[name]=message;vm.runInContext(rollback,context);
+  }
+  for(let repeat=0;repeat<2;repeat++){
+    assert.equal(fail(failure),profile==='workshop'&&repeat===0?denied:profile==='workshop'?false:undefined);
+    assert.equal(state.editFileCount,grouped?1:0);
+    assert.equal(state.linesAdded,grouped?3:0);assert.equal(state.linesRemoved,grouped?1:0);
+  }
+  if(profile==='popOutOnErrorIds')assert.equal(state.popOutOnErrorIds.has('bad'),denied);
+  if(grouped)fail({type:'user',message:{content:[{type:'tool_result',tool_use_id:'good',is_error:true}]}});
+  assert.equal(state.editFileCount,0);assert.equal(state.linesAdded,0);assert.equal(state.linesRemoved,0);
+  const forward=backgroundGroup.changes.find(c=>c.reason==='Forward counts and latest preview identity').after;
+  const ids=forward.match(/if\((\w+)\.__wfLatestFileWriteId!==void 0\)(\w+)\.editFileCount/),output={};
+  vm.runInNewContext(forward,{[ids[1]]:state,[ids[2]]:output});
+  assert.equal(output.__wfLatestFileWriteId,calls.at(-1).id);assert.equal(output.editFileCount,0);
+}
+console.log('PASS: file failures roll back only their own counts once, preserve denial routing and retain failed-only preview identity');
+
+const fileRender=adaptRenderer(render).changes;
+const countFailures=fileRender.find(c=>c.reason.startsWith('Count failed file')).after;
+const countNames=countFailures.match(/new Set\((\w+)\((\w+)\)/),lookupName=countFailures.match(/&&(\w+)\.erroredToolUseIDs/)[1];
+const fileSummary=fileRender.find(c=>c.reason.startsWith('Append failed file')).after;
+const fileJsx=fileSummary.match(/"failed",(\w+)\((\w+),/),fileBold=fileSummary.match(/children:\[(\w+)\(/)[1],fileAppend=fileSummary.match(/if\(__wfFailedWrites>0\)(\w+)\(/)[1];
+const fileCalls=[{id:'bad',name:'Edit'},{id:'bad',name:'Edit'},{id:'good',name:'Write'},{id:'denied',name:'NotebookEdit'},{id:'read',name:'Read'}];
+const summaryRows=[],fileContext={[countNames[1]]:()=>fileCalls,[countNames[2]]:{},[lookupName]:{erroredToolUseIDs:new Set(['bad','denied','read']),toolResultByToolUseID:new Map([['denied',{toolDenialKind:'permission'}]])},[fileJsx[1]]:(type,props)=>props,[fileBold]:(type,props)=>props,[fileJsx[2]]:'text',[fileAppend]:(...args)=>summaryRows.push(args)};
+assert.equal(vm.runInNewContext(countFailures+fileSummary+';__wfFailedWrites',fileContext),1);
+assert.equal(summaryRows.length,1);assert.equal(summaryRows[0][2].color,'error');assert.equal(summaryRows[0][2].children[0].children,1);
+console.log('PASS: failed file summary deduplicates calls, excludes successes and native denials, and uses native error color');
