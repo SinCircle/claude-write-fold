@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import {parse, tokenizer} from './vendor/acorn.mjs';
 
-export const revision = '12-file-failures';
+export const revision = '13-quiet-failures';
 // Preserve the established grouping and preview markers.
 const marker = '/* write-fold:8-background-failure */';
 const options = {ecmaVersion:'latest',sourceType:'module'};
@@ -82,7 +82,7 @@ function addBackgroundRenderer(ed,fn,message){
   const bash=ed.match('if(b&&Co>0)eo("bash",T?"running":"ran",r(n,{children:[e(n,{bold:!0,children:Co})," shell"," ",Co===1?"command":"commands"]}));','b Co eo T r n e',fn);
   const {eo,r,n,e}=bash.b;
   ed.add(fn.start,fn.start,backgroundParser,'Recognize preserved background completions in group messages');
-  ed.add(bash.end,bash.end,`let __wfTasks=new Map;for(let __wfRow of ${message}.__wfBackgroundTasks??[]){let __wfTask=__wfBackgroundTask(__wfRow);if(__wfTask&&(__wfTask.status==="failed"||!__wfTasks.has(__wfTask.taskId)))__wfTasks.set(__wfTask.taskId,__wfTask.status)}let __wfDone=[...__wfTasks.values()].filter(v=>v==="completed").length,__wfFailed=__wfTasks.size-__wfDone;if(__wfDone>0)${eo}("wf-background","completed",${r}(${n},{children:[${e}(${n},{bold:!0,children:__wfDone})," background ",__wfDone===1?"task":"tasks"]}));if(__wfFailed>0)${eo}("wf-background-failed","failed",${r}(${n},{color:"error",children:[${e}(${n},{bold:!0,children:__wfFailed})," background ",__wfFailed===1?"task":"tasks"]}));`,'Append background outcome counts using the native summary formatter');
+  ed.add(bash.end,bash.end,`let __wfTasks=new Map;for(let __wfRow of ${message}.__wfBackgroundTasks??[]){let __wfTask=__wfBackgroundTask(__wfRow);if(__wfTask&&(__wfTask.status==="failed"||!__wfTasks.has(__wfTask.taskId)))__wfTasks.set(__wfTask.taskId,__wfTask.status)}let __wfDone=[...__wfTasks.values()].filter(v=>v==="completed").length;if(__wfDone>0)${eo}("wf-background","completed",${r}(${n},{children:[${e}(${n},{bold:!0,children:__wfDone})," background ",__wfDone===1?"task":"tasks"]}));`,'Append only successful background counts using the native summary formatter');
   const attachment=ed.fn(ed.match('case"queued_command":').start);
   insist(attachment.type==='FunctionDeclaration','attachment renderer is no longer a named function');
   const transcript=ed.match('li=V.map(Ne)','li V Ne',fn),rows=transcript.b.li;
@@ -96,18 +96,6 @@ function addBackgroundRenderer(ed,fn,message){
 // not subtract its successful siblings. Line counts use the native calculator.
 function fileWriteBranch({state,info,count,message,lineCounter,cleaner,map,popOut=false}){
   return `else if(${info}.__wfFileWrite){${state}.editFileCount=(${state}.editFileCount??0)+${count};${state}.__wfLatestFileWriteId=${info}.toolUseIds.at(-1);${state}.linesAdded=(${state}.linesAdded??0)+(${info}.editLines?.added??0);${state}.linesRemoved=(${state}.linesRemoved??0)+(${info}.editLines?.removed??0);${state}.${map}??=new Map;${popOut?`${state}.popOutOnErrorIds??=new Set;`:''}for(let __wfMessage of (${message}.type==="grouped_tool_use"?${message}.messages:[${message}])){let __wfCall=__wfMessage.message.content[0];if(__wfCall?.type!=="tool_use")continue;let __wfLines=${lineCounter}(__wfCall.name,__wfCall.input);${state}.${map}.set(__wfCall.id,{count:1,added:__wfLines.added,removed:__wfLines.removed,spent:!1,__wfFileWrite:!0});${popOut?`${state}.popOutOnErrorIds.add(__wfCall.id);`:''}}${state}.latestDisplayHint=${cleaner}(${info}.name+"("+(${info}.input.file_path??${info}.input.notebook_path??"")+")")}`;
-}
-
-function addFileFailureRenderer(ed,fn,message,lookups,toolCalls){
-  const expanded=ed.match('if(f){let dT=[];for(const au of V){','f dT au V',fn);
-  ed.add(expanded.start,expanded.start,`let __wfFailedWrites=new Set(${toolCalls}(${message}).filter(v=>["Write","Edit","NotebookEdit"].includes(v.name)&&${lookups}.erroredToolUseIDs.has(v.id)&&${lookups}.toolResultByToolUseID.get(v.id)?.toolDenialKind===void 0).map(v=>v.id)).size;`,'Count failed file calls from native messages and error lookups');
-  const empty=ed.match('if(!ue&&!ye&&!Je&&!Ts){','ue ye Je Ts',fn);
-  const statements=[];walk(fn.body,n=>{if(n.type==='IfStatement'&&n.start===empty.start)statements.push(n)});
-  insist(statements.length===1,'Empty-group condition changed');
-  ed.add(statements[0].test.end,statements[0].test.end,'&&!__wfFailedWrites','Keep groups containing only failed file calls visible');
-  const bash=ed.match('if(b&&Co>0)eo("bash",T?"running":"ran",r(n,{children:[e(n,{bold:!0,children:Co})," shell"," ",Co===1?"command":"commands"]}));','b Co eo T r n e',fn);
-  const {eo,r,n,e}=bash.b;
-  ed.add(bash.end,bash.end,`if(__wfFailedWrites>0)${eo}("wf-file-failed","failed",${r}(${n},{color:"error",children:[${e}(${n},{bold:!0,children:__wfFailedWrites})," file ",__wfFailedWrites===1?"operation":"operations"]}));`,'Append failed file count using the native summary formatter');
 }
 
 export function adaptGrouping(source){
@@ -234,6 +222,9 @@ export function adaptRenderer(source){
   const K=ed.match('{columns:K}=Ce()','K Ce',fn).b.K;
   const Bt=ed.match('Bt(d).filter(BN)','Bt d BN',fn,{d}).b.Bt;
   const l3=ed.match('l3.isInterruptedCall(b.toolResultByToolUseID.get(dj.id))','l3 b dj',fn,{b}).b.l3;
+  const errorState=ed.match('ae=ee.some((ge)=>b.erroredToolUseIDs.has(ge)&&le?.has(ge)!==!0)','ae ee ge b le',fn,{b});
+  const errorCheck=ed.match('b.erroredToolUseIDs.has(ge)','b ge',errorState,{b,ge:errorState.b.ge});
+  ed.add(errorCheck.end,errorCheck.end,`&&${b}.toolResultByToolUseID.get(${errorState.b.ge})?.toolDenialKind!==void 0`,'Keep ordinary grouped tool failures out of the compact error indicator');
   const live=ed.match('Pm=M&&Vt===null&&Ea!==void 0&&r(s,{flexDirection:"row",children:','Pm M Vt Ea r s',fn,{M});
   const Pm=live.b.Pm;
   let memo=[];
@@ -244,11 +235,13 @@ export function adaptRenderer(source){
   });
   insist(memo.length===1,'live-detail memo boundary changed');
   const result=ed.match('e(qd,{param:h,message:d,lookups:v,progressMessagesForMessage:f,style:b,tools:g,verbose:M,width:G,isTranscriptMode:B})','e qd h d v f b g M G B').b;
-  const helper=`${marker}function __writeFoldPreview(m){let{content:d,tools:h,lookups:b,columns:K}=m,p=b.progressMessagesByToolUseID.get(d.id)??[],u=b.toolResultByToolUseID.get(d.id),t=u?.type==="user"?u.message.content.find(v=>v.type==="tool_result"&&v.tool_use_id===d.id):void 0;return t?${result.e}(${result.qd},{param:t,message:u,lookups:b,progressMessagesForMessage:p,tools:h,verbose:!1,width:Math.max(1,K-5),isTranscriptMode:!1}):m.fallback}`;
+  const helper=`${marker}function __writeFoldPreview(m){let{content:d,tools:h,lookups:b,columns:K}=m,p=b.progressMessagesByToolUseID.get(d.id)??[],u=b.toolResultByToolUseID.get(d.id),t=u?.type==="user"?u.message.content.find(v=>v.type==="tool_result"&&v.tool_use_id===d.id):void 0;return t?.is_error?null:t?${result.e}(${result.qd},{param:t,message:u,lookups:b,progressMessagesForMessage:p,tools:h,verbose:!1,width:Math.max(1,K-5),isTranscriptMode:!1}):m.fallback}`;
   ed.add(fn.start,fn.start,helper,'Add a result-preview-only component; no ToolUse title');
   const inject=`let __wfLast=${M}?${Bt}(${d}).at(-1):void 0;if(__wfLast&&__wfLast.id===${d}.__wfLatestFileWriteId&&!${l3}.isInterruptedCall(${b}.toolResultByToolUseID.get(__wfLast.id)))${Pm}=${result.e}(__writeFoldPreview,{content:__wfLast,tools:${h},lookups:${b},columns:${K},fallback:${Pm}},__wfLast.id);`;
   ed.add(memo[0].end,memo[0].end,inject,'Replace only active detail content; preserve every native title expression');
-  addFileFailureRenderer(ed,fn,d,b,Bt);
+  const taskProps=ed.match('{addMargin:d,summary:c,monitorEvent:g,status:f,durationMs:h,taskDelivery:M,messageId:T,verbose:v,isExpanded:x}=m','d c g f h M T v x m');
+  const taskFn=ed.fn(taskProps.start),taskBranch=ed.match('if(g!==null&&!x){','g x',taskFn,{g:taskProps.b.g,x:taskProps.b.x});
+  ed.add(taskBranch.start,taskBranch.start,`if(${taskProps.b.f}==="failed"&&!${taskProps.b.v}&&!${taskProps.b.x})return null;`,'Hide failed native task notifications only in the compact view');
   addBackgroundRenderer(ed,fn,d);
   const output=ed.finish();
   // All renderer changes are insertions. All upstream renderer bytes survive.

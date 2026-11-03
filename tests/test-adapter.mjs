@@ -42,7 +42,7 @@ const changedGroup=adaptGrouping(renameBindings(group));
 assert.equal(changedGroup.changes.length,11);global.gc?.();
 console.log('PASS: '+profile+' grouping adapts to renamed identifiers and whitespace');
 const changedRenderer=adaptRenderer(renameBindings(render));
-assert.equal(changedRenderer.changes.length,8);
+assert.equal(changedRenderer.changes.length,7);
 assert(changedRenderer.changes.every(c=>c.before===''));
 assert(changedRenderer.nativeRendererUnchanged);global.gc?.();
 console.log('PASS: preview adapts while preserving native renderer bytes');
@@ -174,7 +174,7 @@ for(const linked of [false,true])for(const outcome of [completion,notification('
   if(linked)assert.equal(state.__wfBackgroundTasks[0],outcome);
 }
 console.log('PASS: linked successful/failed shell notifications preserve their original objects; malformed and unrelated notifications stay standalone');
-const summary=adaptRenderer(render).changes.find(c=>c.reason.startsWith('Append background outcome')).after;
+const summary=adaptRenderer(render).changes.find(c=>c.reason.startsWith('Append only successful background')).after;
 const messageName=summary.match(/of (\w+)\.__wfBackgroundTasks/)[1];
 const summaryCall=summary.match(/if\(__wfDone>0\)(\w+)\(/)[1];
 const jsx=summary.match(/"completed",(\w+)\((\w+),/);
@@ -183,12 +183,11 @@ const failure=notification('task_2','toolu_2',1),sameTaskFailure=notification('t
 for(const [notifications,done,failed] of [[[],0,0],[[completion],1,0],[[completion,completion],1,0],[[completion,notification('task_2','toolu_2')],2,0],[[failure],0,1],[[failure,failure],0,1],[[completion,failure],1,1],[[completion,sameTaskFailure],0,1],[[sameTaskFailure,completion],0,1]]){
   const calls=[],context={...parserContext,[messageName]:{__wfBackgroundTasks:notifications},[summaryCall]:(...args)=>calls.push(args),[jsx[1]]:(type,props)=>props,[bold]:(type,props)=>props,[jsx[2]]:'text'};
   vm.createContext(context);
-  assert.equal(JSON.stringify(vm.runInContext(summary+';[__wfDone,__wfFailed]',context)),JSON.stringify([done,failed]));
-  assert.equal(calls.length,Number(done>0)+Number(failed>0));
+  assert.equal(JSON.stringify(vm.runInContext(summary+';__wfDone',context)),JSON.stringify(done));
+  assert.equal(calls.length,Number(done>0));
   if(done)assert.equal(calls.find(c=>c[1]==='completed')[2].children[0].children,done);
-  if(failed){const result=calls.find(c=>c[1]==='failed')[2];assert.equal(result.children[0].children,failed);assert.equal(result.color,'error')}
 }
-console.log('PASS: summary distinguishes success/failure, colors failures, deduplicates deliveries and never masks a conflicting failure');
+console.log('PASS: compact background summary hides failures, deduplicates success and never counts a conflicting failure as success');
 
 // Exercise per-call rollback with a native grouped-tool row: a failed sibling
 // must not remove the successful sibling's counts or mutate either message.
@@ -232,13 +231,34 @@ for(const grouped of [false,true])for(const denied of [false,true]){
 }
 console.log('PASS: file failures roll back only their own counts once, preserve denial routing and retain failed-only preview identity');
 
-const fileRender=adaptRenderer(render).changes;
-const countFailures=fileRender.find(c=>c.reason.startsWith('Count failed file')).after;
-const countNames=countFailures.match(/new Set\((\w+)\((\w+)\)/),lookupName=countFailures.match(/&&(\w+)\.erroredToolUseIDs/)[1];
-const fileSummary=fileRender.find(c=>c.reason.startsWith('Append failed file')).after;
-const fileJsx=fileSummary.match(/"failed",(\w+)\((\w+),/),fileBold=fileSummary.match(/children:\[(\w+)\(/)[1],fileAppend=fileSummary.match(/if\(__wfFailedWrites>0\)(\w+)\(/)[1];
-const fileCalls=[{id:'bad',name:'Edit'},{id:'bad',name:'Edit'},{id:'good',name:'Write'},{id:'denied',name:'NotebookEdit'},{id:'read',name:'Read'}];
-const summaryRows=[],fileContext={[countNames[1]]:()=>fileCalls,[countNames[2]]:{},[lookupName]:{erroredToolUseIDs:new Set(['bad','denied','read']),toolResultByToolUseID:new Map([['denied',{toolDenialKind:'permission'}]])},[fileJsx[1]]:(type,props)=>props,[fileBold]:(type,props)=>props,[fileJsx[2]]:'text',[fileAppend]:(...args)=>summaryRows.push(args)};
-assert.equal(vm.runInNewContext(countFailures+fileSummary+';__wfFailedWrites',fileContext),1);
-assert.equal(summaryRows.length,1);assert.equal(summaryRows[0][2].color,'error');assert.equal(summaryRows[0][2].children[0].children,1);
-console.log('PASS: failed file summary deduplicates calls, excludes successes and native denials, and uses native error color');
+// The original result objects remain available to transcript expansion.
+const previewNode=patchedAst.body.find(n=>n.type==='FunctionDeclaration'&&n.id.name==='__writeFoldPreview');
+assert(previewNode);
+const previewSource=patched.slice(previewNode.start,previewNode.end);
+const previewJSX=previewSource.match(/return t\?\.is_error\?null:t\?(\w+)\((\w+),/);
+assert(previewJSX);
+for(const outcome of ['pending','success','failure']){
+  const result={type:'tool_result',tool_use_id:'file',is_error:outcome==='failure',content:'original detail'};
+  const message={type:'user',message:{content:[result]}},saved=JSON.stringify(message);
+  const props={content:{id:'file'},tools:[],columns:80,fallback:'native hint',lookups:{progressMessagesByToolUseID:new Map,toolResultByToolUseID:new Map(outcome==='pending'?[]:[['file',message]])}};
+  const value=vm.runInNewContext('('+previewSource+')(props)',{props,[previewJSX[1]]:(type,props)=>props,[previewJSX[2]]:'native-result'});
+  if(outcome==='failure')assert.equal(value,null);
+  else if(outcome==='pending')assert.equal(value,'native hint');
+  else{assert.equal(value.param,result);assert.equal(value.message,message)}
+  assert.equal(JSON.stringify(message),saved);
+}
+const quietIndicator=adaptRenderer(render).changes.find(c=>c.reason.startsWith('Keep ordinary grouped')).after;
+const quietNames=quietIndicator.match(/&&(\w+)\.toolResultByToolUseID.get\((\w+)\)/);
+for(const kind of [undefined,'permission-rule','automode-blocked']){
+  const active=vm.runInNewContext('true'+quietIndicator,{[quietNames[1]]:{toolResultByToolUseID:new Map([['tool',{toolDenialKind:kind}]])},[quietNames[2]]:'tool'});
+  assert.equal(active,kind!==undefined);
+}
+console.log('PASS: failed compact previews are hidden, success/pending previews and original results remain intact, native denial indicators remain visible');
+
+const quietTask=adaptRenderer(render).changes.find(c=>c.reason.startsWith('Hide failed native task')).after;
+const taskNames=quietTask.match(/if\((\w+)==="failed"&&!(\w+)&&!(\w+)\)/);
+for(const status of ['failed','completed','killed',undefined])for(const verbose of [false,true])for(const expanded of [false,true]){
+  const value=vm.runInNewContext('(function(){'+quietTask+'return "native"})()',{[taskNames[1]]:status,[taskNames[2]]:verbose,[taskNames[3]]:expanded});
+  assert.equal(value,status==='failed'&&!verbose&&!expanded?null:'native');
+}
+console.log('PASS: native task failures are hidden when collapsed and preserved when expanded; success and other statuses keep their native rendering');
