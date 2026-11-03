@@ -3,8 +3,8 @@
 import fs from 'node:fs';
 import {parse, tokenizer} from './vendor/acorn.mjs';
 
-export const revision = '7-background-completion';
-const marker = '/* write-fold:7-background-completion */';
+export const revision = '8-background-failure';
+const marker = '/* write-fold:8-background-failure */';
 const options = {ecmaVersion:'latest',sourceType:'module'};
 function insist(ok,message){if(!ok)throw new Error(message);}
 function walk(node,fn){
@@ -60,16 +60,16 @@ class Editor {
   }
 }
 
-// Accept only the native successful shell-task envelope. Unknown formats and
-// nonzero exits remain standalone. Both modules use the same parser; messages
-// themselves stay untouched for transcript expansion and session persistence.
-const backgroundParser = String.raw`function __wfBackgroundTask(m){if(m?.type!=="attachment")return;let a=m.attachment;if(a?.type!=="queued_command"||a.commandMode!=="task-notification"||a.origin?.kind!=="task-notification"||typeof a.prompt!=="string")return;let p=a.prompt.trim().match(/^<task-notification>\s*<task-id>([\w-]+)<\/task-id>\s*<tool-use-id>([\w-]+)<\/tool-use-id>\s*<output-file>[^\r\n]+<\/output-file>\s*<status>completed<\/status>\s*<summary>Background command "[^\r\n]*" completed \(exit code 0\)<\/summary>\s*<\/task-notification>$/);if(p)return{taskId:p[1],toolUseId:p[2]}}`;
+// Accept native shell-task success and failure envelopes with matching status
+// and exit code. Unknown formats stay standalone. Both modules share the parser;
+// original messages stay untouched for transcript expansion and persistence.
+const backgroundParser = String.raw`function __wfBackgroundTask(m){if(m?.type!=="attachment")return;let a=m.attachment;if(a?.type!=="queued_command"||a.commandMode!=="task-notification"||a.origin?.kind!=="task-notification"||typeof a.prompt!=="string")return;let p=a.prompt.trim().match(/^<task-notification>\s*<task-id>([\w-]+)<\/task-id>\s*<tool-use-id>([\w-]+)<\/tool-use-id>\s*<output-file>[^\r\n]+<\/output-file>\s*<status>(completed|failed)<\/status>\s*<summary>Background command "[^\r\n]*" (completed \(exit code 0\)|failed with exit code (-?[1-9]\d*))<\/summary>\s*<\/task-notification>$/);if(p&&(p[3]==="completed")===(p[5]===void 0))return{taskId:p[1],toolUseId:p[2],status:p[3]}}`;
 
 function addBackgroundGrouping(ed){
   const hit=ed.match('else if(i1o(Oe)||Ge!==void 0&&BWt(Ge.message))','i1o Oe Ge BWt');
   const fn=ed.fn(hit.start),message=hit.b.Oe;
   const state=ed.match('z.bashCommands?.set(pt,nt)','z pt nt',fn).b.z;
-  ed.add(fn.start,fn.start,backgroundParser,'Recognize only successful native background shell notifications');
+  ed.add(fn.start,fn.start,backgroundParser,'Recognize native background shell success and failure notifications');
   ed.add(hit.start,hit.start,`else if(${state}.bashCommands?.has(__wfBackgroundTask(${message})?.toolUseId)){${state}.__wfBackgroundTasks??=[];${state}.__wfBackgroundTasks.push(${message});}`,'Absorb completion only when its original command belongs to this group');
   const flush=ed.match('if(n){if((e.bashCount??0)>0)Q.bashCount=','n e Q');
   ed.add(flush.start,flush.start,`if(${flush.b.e}.__wfBackgroundTasks?.length)${flush.b.Q}.__wfBackgroundTasks=${flush.b.e}.__wfBackgroundTasks;`,'Carry original notifications separately from native tool messages');
@@ -81,7 +81,7 @@ function addBackgroundRenderer(ed,fn,message){
   const bash=ed.match('if(b&&Co>0)eo("bash",T?"running":"ran",r(n,{children:[e(n,{bold:!0,children:Co})," shell"," ",Co===1?"command":"commands"]}));','b Co eo T r n e',fn);
   const {eo,r,n,e}=bash.b;
   ed.add(fn.start,fn.start,backgroundParser,'Recognize preserved background completions in group messages');
-  ed.add(bash.end,bash.end,`let __wfDone=new Set((${message}.__wfBackgroundTasks??[]).map(__wfBackgroundTask).filter(Boolean).map(v=>v.taskId)).size;if(__wfDone>0)${eo}("wf-background","completed",${r}(${n},{children:[${e}(${n},{bold:!0,children:__wfDone})," background ",__wfDone===1?"task":"tasks"]}));`,'Append completed background-task count using the native summary formatter');
+  ed.add(bash.end,bash.end,`let __wfTasks=new Map;for(let __wfRow of ${message}.__wfBackgroundTasks??[]){let __wfTask=__wfBackgroundTask(__wfRow);if(__wfTask&&(__wfTask.status==="failed"||!__wfTasks.has(__wfTask.taskId)))__wfTasks.set(__wfTask.taskId,__wfTask.status)}let __wfDone=[...__wfTasks.values()].filter(v=>v==="completed").length,__wfFailed=__wfTasks.size-__wfDone;if(__wfDone>0)${eo}("wf-background","completed",${r}(${n},{children:[${e}(${n},{bold:!0,children:__wfDone})," background ",__wfDone===1?"task":"tasks"]}));if(__wfFailed>0)${eo}("wf-background-failed","failed",${r}(${n},{color:"error",children:[${e}(${n},{bold:!0,children:__wfFailed})," background ",__wfFailed===1?"task":"tasks"]}));`,'Append background outcome counts using the native summary formatter');
   const attachment=ed.fn(ed.match('case"queued_command":').start);
   insist(attachment.type==='FunctionDeclaration','attachment renderer is no longer a named function');
   const transcript=ed.match('li=V.map(Ne)','li V Ne',fn),rows=transcript.b.li;

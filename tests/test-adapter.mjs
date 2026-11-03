@@ -106,12 +106,14 @@ const parserNode=patchedAst.body.find(n=>n.type==='FunctionDeclaration'&&n.id.na
 assert(parserNode);
 const parserContext={};vm.createContext(parserContext);
 vm.runInContext(patched.slice(parserNode.start,parserNode.end),parserContext);
-function notification(task='task_1',tool='toolu_1'){
-  return {type:'attachment',uuid:'notification_'+task,attachment:{type:'queued_command',commandMode:'task-notification',origin:{kind:'task-notification',producer:'session-task'},prompt:`<task-notification>\n<task-id>${task}</task-id>\n<tool-use-id>${tool}</tool-use-id>\n<output-file>fixture/tasks/${task}.output</output-file>\n<status>completed</status>\n<summary>Background command "Fixture background task" completed (exit code 0)</summary>\n</task-notification>`}};
+function notification(task='task_1',tool='toolu_1',exitCode=0){
+  return {type:'attachment',uuid:'notification_'+task,attachment:{type:'queued_command',commandMode:'task-notification',origin:{kind:'task-notification',producer:'session-task'},prompt:`<task-notification>\n<task-id>${task}</task-id>\n<tool-use-id>${tool}</tool-use-id>\n<output-file>fixture/tasks/${task}.output</output-file>\n<status>${exitCode===0?'completed':'failed'}</status>\n<summary>Background command "Fixture background task" ${exitCode===0?'completed (exit code 0)':'failed with exit code '+exitCode}</summary>\n</task-notification>`}};
 }
 const completion=notification(),saved=JSON.stringify(completion);
 assert.equal(parserContext.__wfBackgroundTask(completion).toolUseId,'toolu_1');
 assert.equal(parserContext.__wfBackgroundTask(completion).taskId,'task_1');
+assert.equal(parserContext.__wfBackgroundTask(completion).status,'completed');
+for(const exitCode of [1,7,-1,137])assert.equal(parserContext.__wfBackgroundTask(notification('task_1','toolu_1',exitCode)).status,'failed');
 assert.equal(JSON.stringify(completion),saved);
 const invalid=[undefined,null,{}, {type:'user',message:{content:completion.attachment.prompt}}];
 for(const [from,to] of [['<status>completed','<status>failed'],['<status>completed','<status>killed'],['exit code 0','exit code 7'],['Background command','Agent'],['<tool-use-id>toolu_1</tool-use-id>',''],['<task-id>task_1</task-id>',''],['<output-file>fixture/tasks/task_1.output</output-file>',''],['</task-notification>','</task-notification>\nExtra user text'],['<status>completed</status>','<status>completed</status><status>failed</status>']]){
@@ -121,30 +123,35 @@ for(const [key,value] of [['commandMode','prompt'],['origin',{kind:'human'}],['p
   const row=notification();row.attachment[key]=value;invalid.push(row);
 }
 for(const row of invalid)assert.equal(parserContext.__wfBackgroundTask(row),undefined);
+for(const changed of [notification('task_1','toolu_1',1).attachment.prompt.replace('failed with exit code 1','failed with exit code 0'),notification('task_1','toolu_1',1).attachment.prompt.replace('<status>failed','<status>completed')]){
+  assert.equal(parserContext.__wfBackgroundTask({...completion,attachment:{...completion.attachment,prompt:changed}}),undefined);
+}
 // The exact inserted branch only accepts IDs in the current group's Bash map.
 const backgroundGroup=adaptGrouping(group);
 const branch=backgroundGroup.changes.find(c=>c.reason.startsWith('Absorb completion')).after;
 const binding=branch.match(/else if\((\w+)\.bashCommands\?\.has\(__wfBackgroundTask\((\w+)\)/);
 assert(binding);
-for(const linked of [false,true]){
+for(const linked of [false,true])for(const outcome of [completion,notification('task_1','toolu_1',1)]){
   const state={messages:[],bashCommands:new Map(linked?[['toolu_1','fixture command']]:[])};
-  const context={...parserContext,[binding[1]]:state,[binding[2]]:completion};vm.createContext(context);
+  const context={...parserContext,[binding[1]]:state,[binding[2]]:outcome};vm.createContext(context);
   vm.runInContext('if(false){}'+branch,context);
   assert.equal(state.messages.length,0);
   assert.equal(state.__wfBackgroundTasks?.length??0,linked?1:0);
-  if(linked)assert.equal(state.__wfBackgroundTasks[0],completion);
+  if(linked)assert.equal(state.__wfBackgroundTasks[0],outcome);
 }
-console.log('PASS: successful linked shell completions preserve their original objects; failures, malformed and unrelated notifications stay standalone');
-const summary=adaptRenderer(render).changes.find(c=>c.reason.startsWith('Append completed')).after;
-const messageName=summary.match(/\((\w+)\.__wfBackgroundTasks/)[1];
+console.log('PASS: linked successful/failed shell notifications preserve their original objects; malformed and unrelated notifications stay standalone');
+const summary=adaptRenderer(render).changes.find(c=>c.reason.startsWith('Append background outcome')).after;
+const messageName=summary.match(/of (\w+)\.__wfBackgroundTasks/)[1];
 const summaryCall=summary.match(/if\(__wfDone>0\)(\w+)\(/)[1];
 const jsx=summary.match(/"completed",(\w+)\((\w+),/);
 const bold=summary.match(/children:\[(\w+)\(/)[1];
-for(const [notifications,expected] of [[[],0],[[completion],1],[[completion,completion],1],[[completion,notification('task_2','toolu_2')],2]]){
+const failure=notification('task_2','toolu_2',1),sameTaskFailure=notification('task_1','toolu_1',7);
+for(const [notifications,done,failed] of [[[],0,0],[[completion],1,0],[[completion,completion],1,0],[[completion,notification('task_2','toolu_2')],2,0],[[failure],0,1],[[failure,failure],0,1],[[completion,failure],1,1],[[completion,sameTaskFailure],0,1],[[sameTaskFailure,completion],0,1]]){
   const calls=[],context={...parserContext,[messageName]:{__wfBackgroundTasks:notifications},[summaryCall]:(...args)=>calls.push(args),[jsx[1]]:(type,props)=>props,[bold]:(type,props)=>props,[jsx[2]]:'text'};
   vm.createContext(context);
-  assert.equal(vm.runInContext(summary+';__wfDone',context),expected);
-  assert.equal(calls.length,expected?1:0);
-  if(expected)assert.equal(calls[0][2].children[0].children,expected);
+  assert.equal(JSON.stringify(vm.runInContext(summary+';[__wfDone,__wfFailed]',context)),JSON.stringify([done,failed]));
+  assert.equal(calls.length,Number(done>0)+Number(failed>0));
+  if(done)assert.equal(calls.find(c=>c[1]==='completed')[2].children[0].children,done);
+  if(failed){const result=calls.find(c=>c[1]==='failed')[2];assert.equal(result.children[0].children,failed);assert.equal(result.color,'error')}
 }
-console.log('PASS: native summary formatter receives unique completion counts and adds nothing to ordinary groups');
+console.log('PASS: summary distinguishes success/failure, colors failures, deduplicates deliveries and never masks a conflicting failure');
