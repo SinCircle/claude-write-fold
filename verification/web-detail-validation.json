@@ -1,0 +1,29 @@
+{
+  "revision": "14-web-and-detail-identity",
+  "nativeVersion": "2.1.316",
+  "changedFromV018": [
+    "B:/~BUN/root/chunk-wdaanm8n.js",
+    "B:/~BUN/root/chunk-mwqzkre7.js"
+  ],
+  "focusAndClockUnchanged": true,
+  "diagnosticCodeAbsent": true,
+  "quickTransitions": {
+    "baselineRenders": 17,
+    "baselineStaleHints": 3,
+    "fixedRenders": 19,
+    "fixedStaleHints": 0
+  },
+  "nativeThrottleWithinToolMs": 700,
+  "terminalCases": [
+    "FASTTRANSITION",
+    "TEXTAFTEREDIT",
+    "WEBONLY",
+    "WEBMIXED"
+  ],
+  "structuralAndLogicVersions": [
+    "2.1.311",
+    "2.1.316"
+  ],
+  "fetchValidation": "https://example.com: 577 bytes, 200 OK",
+  "searchValidation": "synthetic local API result through native WebSearch; not live search-provider verification"
+}

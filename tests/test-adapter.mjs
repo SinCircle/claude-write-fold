@@ -39,10 +39,10 @@ assert(process.argv[2] && process.argv[3] && process.argv[4] && process.argv[5],
 const group=fs.readFileSync(process.argv[2],'utf8'),render=fs.readFileSync(process.argv[3],'utf8'),focus=fs.readFileSync(process.argv[4],'utf8'),clock=fs.readFileSync(process.argv[5],'utf8');
 const profile=group.includes('workshopEditsByToolUseId')?'workshop':'popOutOnErrorIds';
 const changedGroup=adaptGrouping(renameBindings(group));
-assert.equal(changedGroup.changes.length,11);global.gc?.();
+assert.equal(changedGroup.changes.length,12);global.gc?.();
 console.log('PASS: '+profile+' grouping adapts to renamed identifiers and whitespace');
 const changedRenderer=adaptRenderer(renameBindings(render));
-assert.equal(changedRenderer.changes.length,7);
+assert.equal(changedRenderer.changes.length,13);
 assert(changedRenderer.changes.every(c=>c.before===''));
 assert(changedRenderer.nativeRendererUnchanged);global.gc?.();
 console.log('PASS: preview adapts while preserving native renderer bytes');
@@ -262,3 +262,42 @@ for(const status of ['failed','completed','killed',undefined])for(const verbose 
   assert.equal(value,status==='failed'&&!verbose&&!expanded?null:'native');
 }
 console.log('PASS: native task failures are hidden when collapsed and preserved when expanded; success and other statuses keep their native rendering');
+
+// Execute the adapted native throttle with React-style state, effect cleanup
+// and controlled time. Changing tools must never commit the prior tool's hint.
+const hintNode=patchedAst.body.find(n=>n.type==='FunctionDeclaration'&&n.params.some(p=>p.name==='__wfIdentity'));
+assert(hintNode);
+const hintSource=patched.slice(hintNode.start,hintNode.end),hintDecl=hintNode.body.body[0].declarations;
+const schedulerName=hintDecl[0].init.callee.name,stateName=hintDecl[1].init.callee.name,refName=hintDecl[2].init.callee.name;
+const effectName=hintNode.body.body.at(-1).argument.expressions[0].callee.name;
+let now=10000,cursor=0,dirty=false,pending=[],hookSlots=[],timers=[];
+const scheduler={setTimeout(fn,delay){const timer={fn,at:now+delay};timers.push(timer);return()=>{timers=timers.filter(t=>t!==timer)}}};
+const hookContext={Date:{now:()=>now},[schedulerName]:()=>scheduler,
+  [stateName](initial){const i=cursor++;if(!(i in hookSlots))hookSlots[i]=initial;return[hookSlots[i],v=>{if(!Object.is(hookSlots[i],v)){hookSlots[i]=v;dirty=true}}]},
+  [refName](initial){const i=cursor++;return hookSlots[i]??=( {current:initial} )},
+  [effectName](fn,deps){const i=cursor++,old=hookSlots[i];if(!old||deps.some((d,j)=>!Object.is(d,old.deps[j])))pending.push(()=>{old?.cleanup?.();hookSlots[i]={deps,cleanup:fn()}})},
+};
+vm.createContext(hookContext);vm.runInContext(hintSource,hookContext);
+function hint(value,id){let output,attempts=0;do{cursor=0;dirty=false;pending=[];output=hookContext[hintNode.id.name](value,700,id);assert(++attempts<10)}while(dirty);for(const effect of pending)effect();return output}
+assert.equal(hint('Edit(old.txt)','edit'),'Edit(old.txt)');
+now+=50;assert.equal(hint('Edit(progress)','edit'),'Edit(old.txt)');assert.equal(timers.length,1);
+now+=50;assert.equal(hint('Read(new.txt)','read'),'Read(new.txt)');assert.equal(timers.length,0);
+now+=50;assert.equal(hint('Read(progress)','read'),'Read(new.txt)');assert.equal(timers.length,1);
+now+=700;for(const timer of [...timers])if(timer.at<=now){timers=timers.filter(t=>t!==timer);timer.fn()}
+assert.equal(hint('Read(progress)','read'),'Read(progress)');
+now+=10;assert.equal(hint('Fetch(example.com)','fetch'),'Fetch(example.com)');
+console.log('PASS: changing tools replaces stale details before commit and cancels pending old updates; same-tool progress keeps the native 700 ms throttle');
+
+const webClass=backgroundGroup.changes.find(c=>c.reason.startsWith('Classify native web')).after;
+const wc=webClass.match(/if\((\w+)\(\)&&.*?includes\((\w+)\)&&(.+?)&&(\w+)\((\w+),(\w+)\)/);assert(wc);
+for(const fullscreen of [false,true])for(const name of ['WebFetch','WebSearch','Read','Write'])for(const remote of [false,true]){
+  const value=vm.runInNewContext('(function(){'+webClass+'return null})()',{[wc[1]]:()=>fullscreen,[wc[2]]:name,[wc[5]]:{},[wc[6]]:{},[wc[4]]:()=>remote?'remote':undefined});
+  assert.equal(value?.__wfWebCall===true,fullscreen&&!remote&&['WebFetch','WebSearch'].includes(name));
+  if(value){assert.equal(value.isRead,false);assert.equal(value.isSearch,false)}
+}
+const webCounter=adaptRenderer(render).changes.find(c=>c.reason.startsWith('Count web calls')).after;
+const countNames=webCounter.match(/let __wfWebCalls=(\w+)\((\w+)\).*?!(\w+)\.erroredToolUseIDs/);assert(countNames);
+const calls=[{id:'fetch1',name:'WebFetch'},{id:'search1',name:'WebSearch'},{id:'search2',name:'WebSearch'},{id:'read',name:'Read'}];
+const counts=vm.runInNewContext(webCounter+';[__wfFetch,__wfSearch]',{[countNames[1]]:m=>m.calls,[countNames[2]]:{calls},[countNames[3]]:{erroredToolUseIDs:new Set(['search2'])}});
+assert.equal(JSON.stringify(counts),'[1,1]');
+console.log('PASS: native web fetch/search join fullscreen groups, keep file counts separate, and exclude failed calls from successful web counts');

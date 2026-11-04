@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import {parse, tokenizer} from './vendor/acorn.mjs';
 
-export const revision = '13-quiet-failures';
+export const revision = '14-web-and-detail-identity';
 // Preserve the established grouping and preview markers.
 const marker = '/* write-fold:8-background-failure */';
 const options = {ecmaVersion:'latest',sourceType:'module'};
@@ -98,6 +98,24 @@ function fileWriteBranch({state,info,count,message,lineCounter,cleaner,map,popOu
   return `else if(${info}.__wfFileWrite){${state}.editFileCount=(${state}.editFileCount??0)+${count};${state}.__wfLatestFileWriteId=${info}.toolUseIds.at(-1);${state}.linesAdded=(${state}.linesAdded??0)+(${info}.editLines?.added??0);${state}.linesRemoved=(${state}.linesRemoved??0)+(${info}.editLines?.removed??0);${state}.${map}??=new Map;${popOut?`${state}.popOutOnErrorIds??=new Set;`:''}for(let __wfMessage of (${message}.type==="grouped_tool_use"?${message}.messages:[${message}])){let __wfCall=__wfMessage.message.content[0];if(__wfCall?.type!=="tool_use")continue;let __wfLines=${lineCounter}(__wfCall.name,__wfCall.input);${state}.${map}.set(__wfCall.id,{count:1,added:__wfLines.added,removed:__wfLines.removed,spent:!1,__wfFileWrite:!0});${popOut?`${state}.popOutOnErrorIds.add(__wfCall.id);`:''}}${state}.latestDisplayHint=${cleaner}(${info}.name+"("+(${info}.input.file_path??${info}.input.notebook_path??"")+")")}`;
 }
 
+function addWebClassification(ed,at,{fullscreen,name,input,tool,remote}){
+  ed.add(at,at,`if(${fullscreen}()&&["WebFetch","WebSearch"].includes(${name})&&${tool}&&${remote}(${tool},${input})===void 0)return{isCollapsible:!0,isSearch:!1,isRead:!1,isList:!1,isREPL:!1,isMemoryWrite:!1,isScratchpadWrite:!1,isAbsorbedSilently:!1,__wfWebCall:!0};`,'Classify native web fetch and search without file-read counts');
+}
+function webCallBranch({state,info,cleaner}){
+  return `else if(${info}.__wfWebCall){${state}.latestDisplayHint=${cleaner}(${info}.input.url??${info}.input.query??"")}`;
+}
+function addWebSummary(ed,fn,message,lookups,toolCalls,active){
+  const expanded=ed.match('if(f){let dT=[];for(const au of V){','f dT au V',fn);
+  ed.add(expanded.start,expanded.start,`let __wfWebCalls=${toolCalls}(${message}).filter(v=>!${lookups}.erroredToolUseIDs.has(v.id)),__wfFetch=__wfWebCalls.filter(v=>v.name==="WebFetch").length,__wfSearch=__wfWebCalls.filter(v=>v.name==="WebSearch").length;`,'Count web calls from the original messages, excluding failures');
+  const empty=ed.match('if(!ue&&!ye&&!Je&&!Ts){','ue ye Je Ts',fn),conditions=[];
+  walk(fn.body,n=>{if(n.type==='IfStatement'&&n.start===empty.start)conditions.push(n)});
+  insist(conditions.length===1,'Empty-group condition changed');
+  ed.add(conditions[0].test.end,conditions[0].test.end,'&&!__wfFetch&&!__wfSearch','Keep web-only groups visible');
+  const bash=ed.match('if(b&&Co>0)eo("bash",T?"running":"ran",r(n,{children:[e(n,{bold:!0,children:Co})," shell"," ",Co===1?"command":"commands"]}));','b Co eo T r n e',fn);
+  const {eo,r,n,e}=bash.b;
+  ed.add(bash.end,bash.end,`if(__wfFetch>0)${eo}("wf-fetch",${active}?"fetching":"fetched",${r}(${n},{children:[${e}(${n},{bold:!0,children:__wfFetch})," web ",__wfFetch===1?"page":"pages"]}));if(__wfSearch>0)${eo}("wf-search",${active}?"searching":"searched",${r}(${n},{children:[${e}(${n},{bold:!0,children:__wfSearch})," web ",__wfSearch===1?"query":"queries"]}));`,'Summarize web activity with the native formatter');
+}
+
 export function adaptGrouping(source){
   if(!source.includes('workshopEditsByToolUseId'))return adaptGroupingModern(source);
   const ed=new Editor(source,'grouping');
@@ -107,13 +125,14 @@ export function adaptGrouping(source){
   const [name,input]=fn.params.map(p=>p.name),tool=classify.b.y;
   const fullscreen=ed.match('isBash:sd()?!Se&&we:void 0','sd Se we',fn).b.sd;
   const remote=ed.match('if(Jht(y,n)!==void 0)return{isCollapsible:!1','Jht y n',fn,{y:tool,n:input}).b.Jht;
+  addWebClassification(ed,classify.start,{fullscreen,name,input,tool,remote});
   ed.add(classify.start,classify.start,
     `${marker}if(${fullscreen}()&&["Write","Edit","NotebookEdit"].includes(${name})&&${tool}&&${remote}(${tool},${input})===void 0)return{isCollapsible:!0,isSearch:!1,isRead:!1,isList:!1,isREPL:!1,isMemoryWrite:!1,isScratchpadWrite:!1,isWorkshopWrite:!1,isAbsorbedSilently:!1,__wfFileWrite:!0};`,
     'Classify normal local file writes after existing special rules');
   let hit=ed.match('accountMemory:r.accountMemory,isBash:r.isBash}}return null}','r');
-  ed.replace(hit,`accountMemory:${hit.b.r}.accountMemory,isBash:${hit.b.r}.isBash,__wfFileWrite:${hit.b.r}.__wfFileWrite}}return null}`,'Carry the file-write classification');
+  ed.replace(hit,`accountMemory:${hit.b.r}.accountMemory,isBash:${hit.b.r}.isBash,__wfFileWrite:${hit.b.r}.__wfFileWrite,__wfWebCall:${hit.b.r}.__wfWebCall}}return null}`,'Carry the file-write classification');
   hit=ed.match('else if(r.isWorkshopWrite||r.isScratchpadWrite||r.isAbsorbedSilently);','r');
-  ed.replace(hit,`else if(${hit.b.r}.__wfFileWrite||${hit.b.r}.isWorkshopWrite||${hit.b.r}.isScratchpadWrite||${hit.b.r}.isAbsorbedSilently);`,'Keep writes out of read counts');
+  ed.replace(hit,`else if(${hit.b.r}.__wfFileWrite||${hit.b.r}.__wfWebCall||${hit.b.r}.isWorkshopWrite||${hit.b.r}.isScratchpadWrite||${hit.b.r}.isAbsorbedSilently);`,'Keep writes out of read counts');
   hit=ed.match('let Q=null;if(r.isScratchpadWrite||r.isWorkshopWrite){','Q r');
   ed.replace(hit,`let ${hit.b.Q}=null;if(${hit.b.r}.__wfFileWrite||${hit.b.r}.isScratchpadWrite||${hit.b.r}.isWorkshopWrite){`,'Reuse native line counting');
   const lineCounter=ed.match('let Ce=r9n(r.name,Ee.input);Se+=Ce.added,we+=Ce.removed','Ce r9n r Ee Se we',ed.fn(hit.start)).b.r9n;
@@ -122,7 +141,7 @@ export function adaptGrouping(source){
   const workshopEnd=ed.match('else if(je.isScratchpadWrite){','je',groupFn,{je}).start;
   const cleaner=ed.match('let gt=Soe(je.input),vt=gt?hoe(os(gt)):"";if(vt)z.latestDisplayHint=vt','gt Soe je vt hoe os z',{start:hit.start,end:workshopEnd},{je,z}).b.hoe;
   const callMessage=ed.match('for(let nt of je.toolUseIds)z.toolUseIds.add(nt);z.messages.push(Oe)','nt je z Oe',groupFn,{je,z}).b.Oe;
-  const branch=fileWriteBranch({state:z,info:je,count:st,message:callMessage,lineCounter,cleaner,map:'workshopEditsByToolUseId'});
+  const branch=fileWriteBranch({state:z,info:je,count:st,message:callMessage,lineCounter,cleaner,map:'workshopEditsByToolUseId'})+webCallBranch({state:z,info:je,cleaner});
   ed.add(hit.start,hit.start,branch,'Track file calls with native line counts and latest preview identity');
   hit=ed.match('if(n){if((e.bashCount??0)>0)Q.bashCount=','n e Q');
   const state=hit.b.e,out=hit.b.Q;
@@ -146,11 +165,12 @@ function adaptGroupingModern(source){
   const [name,input]=fn.params.map(p=>p.name),tool=classify.b.y;
   const fullscreen=ed.match('isBash:sd()?!Se&&we:void 0','sd Se we',fn).b.sd;
   const remote=ed.match('if(Jht(y,n)!==void 0)return{isCollapsible:!1','Jht y n',fn,{y:tool,n:input}).b.Jht;
+  addWebClassification(ed,classify.start,{fullscreen,name,input,tool,remote});
   ed.add(classify.start,classify.start,`${marker}if(${fullscreen}()&&["Write","Edit","NotebookEdit"].includes(${name})&&${tool}&&${remote}(${tool},${input})===void 0)return{isCollapsible:!0,isSearch:!1,isRead:!1,isList:!1,isREPL:!1,isMemoryWrite:!1,isScratchpadWrite:!1,isAbsorbedSilently:!1,__wfFileWrite:!0};`,'Classify ordinary local file writes');
   let hit=ed.match('accountMemory:r.accountMemory,isBash:r.isBash}}return null}','r');
-  ed.replace(hit,`accountMemory:${hit.b.r}.accountMemory,isBash:${hit.b.r}.isBash,__wfFileWrite:${hit.b.r}.__wfFileWrite}}return null}`,'Carry the file-write classification');
+  ed.replace(hit,`accountMemory:${hit.b.r}.accountMemory,isBash:${hit.b.r}.isBash,__wfFileWrite:${hit.b.r}.__wfFileWrite,__wfWebCall:${hit.b.r}.__wfWebCall}}return null}`,'Carry the file-write classification');
   hit=ed.match('else if(r.isScratchpadWrite||r.isAbsorbedSilently);','r');
-  ed.replace(hit,`else if(${hit.b.r}.__wfFileWrite||${hit.b.r}.isScratchpadWrite||${hit.b.r}.isAbsorbedSilently);`,'Keep writes out of read counts');
+  ed.replace(hit,`else if(${hit.b.r}.__wfFileWrite||${hit.b.r}.__wfWebCall||${hit.b.r}.isScratchpadWrite||${hit.b.r}.isAbsorbedSilently);`,'Keep writes out of read counts');
   hit=ed.match('let Q=null;if(r.isScratchpadWrite){','Q r');
   ed.replace(hit,`let ${hit.b.Q}=null;if(${hit.b.r}.__wfFileWrite||${hit.b.r}.isScratchpadWrite){`,'Reuse native line counting');
   const lineCounter=ed.match('let Ce=r9n(r.name,Ee.input);Se+=Ce.added,we+=Ce.removed','Ce r9n r Ee Se we',ed.fn(hit.start)).b.r9n;
@@ -159,7 +179,7 @@ function adaptGroupingModern(source){
   const cleaner=ed.match('let gt=Soe(je.input),vt=gt?hoe(os(gt)):"";if(vt)z.latestDisplayHint=vt','gt Soe je vt hoe os z',groupFn,{je,z}).b.hoe;
   ed.match('z.popOutOnErrorIds??=new Set;for(let nt of je.toolUseIds)z.popOutOnErrorIds.add(nt)','z nt je',groupFn,{z,je});
   const callMessage=ed.match('for(let nt of je.toolUseIds)z.toolUseIds.add(nt);z.messages.push(Oe)','nt je z Oe',groupFn,{je,z}).b.Oe;
-  ed.add(hit.start,hit.start,fileWriteBranch({state:z,info:je,count:st,message:callMessage,lineCounter,cleaner,map:'__wfEditsById',popOut:true}),'Track file calls with native line counts and latest preview identity');
+  ed.add(hit.start,hit.start,fileWriteBranch({state:z,info:je,count:st,message:callMessage,lineCounter,cleaner,map:'__wfEditsById',popOut:true})+webCallBranch({state:z,info:je,cleaner}),'Track file calls with native line counts and latest preview identity');
   hit=ed.match('if(n){if((e.bashCount??0)>0)Q.bashCount=','n e Q');
   const state=hit.b.e,out=hit.b.Q;
   ed.add(hit.start,hit.start,`if(${state}.__wfLatestFileWriteId!==void 0)${out}.editFileCount=${state}.editFileCount,${out}.linesAdded=${state}.linesAdded,${out}.linesRemoved=${state}.linesRemoved,${out}.__wfLatestFileWriteId=${state}.__wfLatestFileWriteId;`,'Forward counts and latest preview identity');
@@ -222,6 +242,18 @@ export function adaptRenderer(source){
   const K=ed.match('{columns:K}=Ce()','K Ce',fn).b.K;
   const Bt=ed.match('Bt(d).filter(BN)','Bt d BN',fn,{d}).b.Bt;
   const l3=ed.match('l3.isInterruptedCall(b.toolResultByToolUseID.get(dj.id))','l3 b dj',fn,{b}).b.l3;
+  // Hint throttling stays native within one tool. A new tool identity resets
+  // the value during render, so leaving a preview cannot expose an old hint.
+  const hintCall=ed.match('let u1=ug(bs,_x),iT,ko=M&&d.isLiveBriefTurn===!0','u1 ug bs _x iT ko M d',fn,{M,d});
+  const hintFn=ed.functions.find(n=>n.type==='FunctionDeclaration'&&n.id?.name===hintCall.b.ug);
+  insist(hintFn?.params.length===2,'Native detail throttle changed');
+  const hintState=ed.match('let c=yn(),[g,f]=y(m),h=A(0);','c yn g f y m h A',hintFn,{m:hintFn.params[0].name});
+  const hintExpr=ed.match('ug(bs,_x)','ug bs _x',hintCall,hintCall.b);
+  ed.add(hintFn.params[1].end,hintFn.params[1].end,',__wfIdentity','Give the native detail throttle its tool identity');
+  ed.add(hintExpr.end-1,hintExpr.end-1,`,${Bt}(${d}).at(-1)?.id`,'Use the same latest tool identity for hint and preview');
+  const hs=hintState.b;
+  ed.add(hintState.end,hintState.end,`let[__wfPriorId,__wfSetId]=${hs.y}(__wfIdentity);if(__wfPriorId!==__wfIdentity){__wfSetId(__wfIdentity);${hs.h}.current=0;${hs.f}(${hs.m});${hs.g}=${hs.m}}`,'Reset stale hint state synchronously when the tool changes');
+
   const errorState=ed.match('ae=ee.some((ge)=>b.erroredToolUseIDs.has(ge)&&le?.has(ge)!==!0)','ae ee ge b le',fn,{b});
   const errorCheck=ed.match('b.erroredToolUseIDs.has(ge)','b ge',errorState,{b,ge:errorState.b.ge});
   ed.add(errorCheck.end,errorCheck.end,`&&${b}.toolResultByToolUseID.get(${errorState.b.ge})?.toolDenialKind!==void 0`,'Keep ordinary grouped tool failures out of the compact error indicator');
@@ -237,11 +269,12 @@ export function adaptRenderer(source){
   const result=ed.match('e(qd,{param:h,message:d,lookups:v,progressMessagesForMessage:f,style:b,tools:g,verbose:M,width:G,isTranscriptMode:B})','e qd h d v f b g M G B').b;
   const helper=`${marker}function __writeFoldPreview(m){let{content:d,tools:h,lookups:b,columns:K}=m,p=b.progressMessagesByToolUseID.get(d.id)??[],u=b.toolResultByToolUseID.get(d.id),t=u?.type==="user"?u.message.content.find(v=>v.type==="tool_result"&&v.tool_use_id===d.id):void 0;return t?.is_error?null:t?${result.e}(${result.qd},{param:t,message:u,lookups:b,progressMessagesForMessage:p,tools:h,verbose:!1,width:Math.max(1,K-5),isTranscriptMode:!1}):m.fallback}`;
   ed.add(fn.start,fn.start,helper,'Add a result-preview-only component; no ToolUse title');
-  const inject=`let __wfLast=${M}?${Bt}(${d}).at(-1):void 0;if(__wfLast&&__wfLast.id===${d}.__wfLatestFileWriteId&&!${l3}.isInterruptedCall(${b}.toolResultByToolUseID.get(__wfLast.id)))${Pm}=${result.e}(__writeFoldPreview,{content:__wfLast,tools:${h},lookups:${b},columns:${K},fallback:${Pm}},__wfLast.id);`;
+  const inject=`let __wfLast=${M}?${Bt}(${d}).at(-1):void 0;if(__wfLast&&(__wfLast.id===${d}.__wfLatestFileWriteId||["WebFetch","WebSearch"].includes(__wfLast.name))&&!${l3}.isInterruptedCall(${b}.toolResultByToolUseID.get(__wfLast.id)))${Pm}=${result.e}(__writeFoldPreview,{content:__wfLast,tools:${h},lookups:${b},columns:${K},fallback:${Pm}},__wfLast.id);`;
   ed.add(memo[0].end,memo[0].end,inject,'Replace only active detail content; preserve every native title expression');
   const taskProps=ed.match('{addMargin:d,summary:c,monitorEvent:g,status:f,durationMs:h,taskDelivery:M,messageId:T,verbose:v,isExpanded:x}=m','d c g f h M T v x m');
   const taskFn=ed.fn(taskProps.start),taskBranch=ed.match('if(g!==null&&!x){','g x',taskFn,{g:taskProps.b.g,x:taskProps.b.x});
   ed.add(taskBranch.start,taskBranch.start,`if(${taskProps.b.f}==="failed"&&!${taskProps.b.v}&&!${taskProps.b.x})return null;`,'Hide failed native task notifications only in the compact view');
+  addWebSummary(ed,fn,d,b,Bt,M);
   addBackgroundRenderer(ed,fn,d);
   const output=ed.finish();
   // All renderer changes are insertions. All upstream renderer bytes survive.

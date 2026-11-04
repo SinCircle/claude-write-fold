@@ -24,3 +24,4 @@
 !/verification/
 /verification/*
 !/verification/animation-validation.json
+!/verification/web-detail-validation.json
