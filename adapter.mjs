@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import {parse, tokenizer} from './vendor/acorn.mjs';
 
-export const revision = '14-web-and-detail-identity';
+export const revision = '15-stream-handoff';
 // Preserve the established grouping and preview markers.
 const marker = '/* write-fold:8-background-failure */';
 const options = {ecmaVersion:'latest',sourceType:'module'};
@@ -95,7 +95,7 @@ function addBackgroundRenderer(ed,fn,message){
 // Retain per-call counts so a failed member of a native grouped_tool_use does
 // not subtract its successful siblings. Line counts use the native calculator.
 function fileWriteBranch({state,info,count,message,lineCounter,cleaner,map,popOut=false}){
-  return `else if(${info}.__wfFileWrite){${state}.editFileCount=(${state}.editFileCount??0)+${count};${state}.__wfLatestFileWriteId=${info}.toolUseIds.at(-1);${state}.linesAdded=(${state}.linesAdded??0)+(${info}.editLines?.added??0);${state}.linesRemoved=(${state}.linesRemoved??0)+(${info}.editLines?.removed??0);${state}.${map}??=new Map;${popOut?`${state}.popOutOnErrorIds??=new Set;`:''}for(let __wfMessage of (${message}.type==="grouped_tool_use"?${message}.messages:[${message}])){let __wfCall=__wfMessage.message.content[0];if(__wfCall?.type!=="tool_use")continue;let __wfLines=${lineCounter}(__wfCall.name,__wfCall.input);${state}.${map}.set(__wfCall.id,{count:1,added:__wfLines.added,removed:__wfLines.removed,spent:!1,__wfFileWrite:!0});${popOut?`${state}.popOutOnErrorIds.add(__wfCall.id);`:''}}${state}.latestDisplayHint=${cleaner}(${info}.name+"("+(${info}.input.file_path??${info}.input.notebook_path??"")+")")}`;
+  return `else if(${info}.__wfFileWrite){${state}.editFileCount=(${state}.editFileCount??0)+${count};${state}.__wfLatestFileWriteId=${info}.toolUseIds.at(-1);${state}.linesAdded=(${state}.linesAdded??0)+(${info}.editLines?.added??0);${state}.linesRemoved=(${state}.linesRemoved??0)+(${info}.editLines?.removed??0);${state}.${map}??=new Map;${popOut?`${state}.popOutOnErrorIds??=new Set;`:''}for(let __wfMessage of (${message}.type==="grouped_tool_use"?${message}.messages:[${message}])){let __wfCall=__wfMessage.message.content[0];if(__wfCall?.type!=="tool_use")continue;let __wfLines=${lineCounter}(__wfCall.name,__wfCall.input);${state}.${map}.set(__wfCall.id,{count:1,added:__wfLines.added,removed:__wfLines.removed,spent:!1,__wfFileWrite:!0});${popOut?`${state}.popOutOnErrorIds.add(__wfCall.id);`:''}}${state}.latestDisplayHint=${cleaner}(${info}.name==="Write"?"Writing…":${info}.name==="NotebookEdit"?"Editing notebook…":"Editing…")}`;
 }
 
 function addWebClassification(ed,at,{fullscreen,name,input,tool,remote}){
@@ -193,6 +193,34 @@ function adaptGroupingModern(source){
 // The native focused-conversation projection already supplies isLoading for
 // running, non-idle agents. Feed it into the existing group/brief predicates;
 // the upstream indicator, task title and detail components need no new rules.
+function addStreamingHandoff(ed){
+  const next=ed.match('return this.previous=cP(this.previous,m,h,x),this.previous','cP m h x');
+  const method=ed.fn(next.start);
+  insist(method.params.length===3,'Native streaming selector signature changed');
+  ed.add(method.params.at(-1).end,method.params.at(-1).end,',__wfHold,__wfConversation','Pass fullscreen activity and conversation identity to the native streaming selector');
+  ed.add(next.start,next.start,'if(this.__wfConversation!==__wfConversation)this.previous=[];this.__wfConversation=__wfConversation;this.__wfHold=__wfHold;','Reset held streaming state at conversation boundaries');
+  const select=ed.match('cP(this.previous,m,h,x)','cP m h x',method,next.b);
+  ed.add(select.end-1,select.end-1,',__wfHold','Keep the native selector in charge of streaming deduplication');
+  const filter=ed.functions.find(n=>n.type==='FunctionDeclaration'&&n.id?.name===next.b.cP);
+  insist(filter?.params.length===4,'Native streaming filter signature changed');
+  const [previous,current,running,committed]=filter.params.map(p=>p.name);
+  ed.add(filter.params.at(-1).end,filter.params.at(-1).end,',__wfHold','Identify the active fullscreen handoff');
+  ed.add(filter.body.start+1,filter.body.start+1,`if(__wfHold&&${current}.length===0)${current}=${previous};`,'Retain the pending stream until its committed message arrives');
+  const drop=ed.match('if(x.has(D)||T.has(D)||C.has(D))continue','x D T C',filter,{x:running,T:committed});
+  const executing=ed.match('x.has(D)','x D',drop,drop.b);
+  ed.add(executing.start,executing.start,'!__wfHold&&','Execution starting is not evidence that the transcript already contains the call');
+  const props=ed.match('streamingToolUses:W,isLoading:G,hasStreamingText:K','W G K');
+  const view=ed.fn(props.start),mode=ed.match('te=Ai(),me=E==="transcript"','te Ai me E',view).b;
+  const identity=ed.match('conversationId:I,screen:E','I E',view,{E:mode.E}).b.I;
+  const call=ed.match('cn=jt.next(W,C,xt)','cn jt W C xt',view,{W:props.b.W});
+  const hold=`${mode.te}&&!${mode.me}&&${props.b.G}`;
+  ed.add(call.end-1,call.end-1,`,${hold},${identity}`,'Limit handoff retention to the active fullscreen view');
+  const memo=[];
+  walk(view.body,n=>{if(n.type==='IfStatement'&&n.start<=call.start&&n.end>=call.end&&n.alternate?.expression?.left?.name===call.b.cn)memo.push(n)});
+  insist(memo.length===1,'Native streaming selector memo boundary changed');
+  ed.add(memo[0].test.end,memo[0].test.end,`||${call.b.jt}.__wfHold!==(${hold})||${call.b.jt}.__wfConversation!==${identity}`,'Invalidate the native stream memo when activity, view or conversation changes');
+}
+
 export function adaptFocusedLoading(source){
   const ed=new Editor(source,'focused-loading');
   const context=ed.match('D=T.kind==="live"?T.turn:null,L=T.kind==="live"&&T.focused.isMain','D T L');
@@ -206,6 +234,7 @@ export function adaptFocusedLoading(source){
   const activeTools=ed.match('T.focused.inProgressToolUseIDs.size>0','T',focused,{T});
   ed.add(activeTools.start,activeTools.start,'(','Preserve the native in-progress-tools condition');
   ed.add(activeTools.end,activeTools.end,`||${T}.focused.isLoading)`,'Use the same native focused loading in brief-mode grouping');
+  addStreamingHandoff(ed);
   const result=ed.finish();
   insist(ed.edits.every(e=>e.start===e.end),'Native focused loading logic was overwritten');
   return result;
@@ -267,7 +296,8 @@ export function adaptRenderer(source){
   });
   insist(memo.length===1,'live-detail memo boundary changed');
   const result=ed.match('e(qd,{param:h,message:d,lookups:v,progressMessagesForMessage:f,style:b,tools:g,verbose:M,width:G,isTranscriptMode:B})','e qd h d v f b g M G B').b;
-  const helper=`${marker}function __writeFoldPreview(m){let{content:d,tools:h,lookups:b,columns:K}=m,p=b.progressMessagesByToolUseID.get(d.id)??[],u=b.toolResultByToolUseID.get(d.id),t=u?.type==="user"?u.message.content.find(v=>v.type==="tool_result"&&v.tool_use_id===d.id):void 0;return t?.is_error?null:t?${result.e}(${result.qd},{param:t,message:u,lookups:b,progressMessagesForMessage:p,tools:h,verbose:!1,width:Math.max(1,K-5),isTranscriptMode:!1}):m.fallback}`;
+  const pending=ed.match('case"query_update":return e(Ge,{children:r(n,{dimColor:!0,children:["Searching: ",c.query]})})','e Ge r n c').b;
+  const helper=`${marker}function __writeFoldPreview(m){let{content:d,tools:h,lookups:b,columns:K}=m,p=b.progressMessagesByToolUseID.get(d.id)??[],u=b.toolResultByToolUseID.get(d.id),t=u?.type==="user"?u.message.content.find(v=>v.type==="tool_result"&&v.tool_use_id===d.id):void 0,v={Write:"Writing…",Edit:"Editing…",NotebookEdit:"Editing notebook…",WebFetch:"Fetching…",WebSearch:"Searching…"}[d.name];return t?.is_error?null:t?${result.e}(${result.qd},{param:t,message:u,lookups:b,progressMessagesForMessage:p,tools:h,verbose:!1,width:Math.max(1,K-5),isTranscriptMode:!1}):v?${pending.e}(${pending.Ge},{children:${pending.e}(${pending.n},{dimColor:!0,children:v})}):m.fallback}`;
   ed.add(fn.start,fn.start,helper,'Add a result-preview-only component; no ToolUse title');
   const inject=`let __wfLast=${M}?${Bt}(${d}).at(-1):void 0;if(__wfLast&&(__wfLast.id===${d}.__wfLatestFileWriteId||["WebFetch","WebSearch"].includes(__wfLast.name))&&!${l3}.isInterruptedCall(${b}.toolResultByToolUseID.get(__wfLast.id)))${Pm}=${result.e}(__writeFoldPreview,{content:__wfLast,tools:${h},lookups:${b},columns:${K},fallback:${Pm}},__wfLast.id);`;
   ed.add(memo[0].end,memo[0].end,inject,'Replace only active detail content; preserve every native title expression');

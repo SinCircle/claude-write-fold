@@ -53,7 +53,7 @@ assert.throws(()=>adaptAnimationClock(changedClock.source),/already patched/);
 assert.throws(()=>adaptAnimationClock(clock.replaceAll('subscribeLayout','upstreamChangedLayout')),/got 0/);
 console.log('PASS: animation visibility reuses the native layout hook; unchanged native code and strict structural checks');
 const changedFocus=adaptFocusedLoading(renameBindings(focus));
-assert.equal(changedFocus.changes.length,3);
+assert.equal(changedFocus.changes.length,11);
 assert(changedFocus.changes.every(c=>c.before===''));
 assert.throws(()=>adaptFocusedLoading(changedFocus.source),/already patched/);
 assert.throws(()=>adaptFocusedLoading(focus.replaceAll('focused.inProgressToolUseIDs','focused.upstreamChangedIDs')),/got 0/);
@@ -61,7 +61,7 @@ console.log('PASS: focused-loading adapter preserves native code and rejects uns
 // Exercise the actual injected routing and native brief-loading expression.
 // Tool gaps must use the focused agent flag; main/static views stay unchanged.
 const focusPatch=adaptFocusedLoading(focus),focusAst=parse(focusPatch.source,options);
-const routing=focusPatch.changes[0].after;
+const routing=focusPatch.changes.find(c=>c.reason.startsWith('Use native focused loading')).after;
 const routeNames=routing.match(/if\((\w+)\.kind==="live"&&!\1\.focused.isMain\)(\w+)=\1\.focused.isLoading;/);
 assert(routeNames);
 const loadingNodes=[];
@@ -81,6 +81,32 @@ for(const mainBusy of [false,true])for(const focusedBusy of [false,true])for(con
   assert.equal(brief,kind==='live'?(isMain?mainBusy:executing||focusedBusy):false);
 }
 console.log('PASS: 32 focused-loading states keep running agents active between tools and preserve main/static views');
+
+// Replay the real streaming handoff: message_stop clears the streamed list,
+// execution starts, and only then does the committed transcript arrive.
+const streamClass=focusAst.body.find(n=>n.type==='ClassDeclaration'&&focusPatch.source.slice(n.start,n.end).includes('this.__wfConversation='));
+const streamFilter=focusAst.body.find(n=>n.type==='FunctionDeclaration'&&n.params.some(p=>p.name==='__wfHold'));
+assert(streamClass&&streamFilter);
+const emptyName=streamClass.body.body.find(n=>n.type==='PropertyDefinition'&&n.key.name==='previous').value.name;
+const streamContext={};vm.createContext(streamContext);
+vm.runInContext(`const ${emptyName}=[];`+focusPatch.source.slice(streamFilter.start,streamFilter.end)+focusPatch.source.slice(streamClass.start,streamClass.end)+`;globalThis.Selector=${streamClass.id.name}`,streamContext);
+const select=new streamContext.Selector,empty=new Set;
+const a={index:0,contentBlock:{type:'tool_use',id:'edit-a',name:'Edit',input:{}}},b={index:1,contentBlock:{type:'tool_use',id:'write-b',name:'Write',input:{}}};
+const streamSaved=JSON.stringify([a,b]);
+assert.equal(select.next([a],empty,empty,true,'chat-a')[0],a);
+assert.equal(select.next([],empty,empty,true,'chat-a')[0],a);
+assert.equal(select.next([],new Set(['edit-a']),empty,true,'chat-a')[0],a);
+assert.equal(select.next([],new Set(['edit-a']),new Set(['edit-a']),true,'chat-a').length,0);
+assert.equal(select.next([a,b,b],empty,new Set(['edit-a']),true,'chat-a').length,1);
+assert.equal(select.next([],empty,empty,true,'chat-b').length,0);
+select.next([a],empty,empty,true,'chat-b');
+assert.equal(select.next([],empty,empty,false,'chat-b').length,0);
+assert.equal(select.next([a],new Set(['edit-a']),empty,false,'chat-b').length,0);
+select.next([a],empty,empty,true,'chat-b');
+assert.equal(select.next([b],empty,empty,true,'chat-b')[0],b);
+assert.equal(select.previous.length,1);
+assert.equal(JSON.stringify([a,b]),streamSaved);
+console.log('PASS: streamed calls survive clearing/execution until committed, deduplicate by ID, and clear on stop, view change, conversation change or a new stream');
 assert.throws(()=>adaptGrouping(changedGroup.source),/already patched/);
 assert.throws(()=>adaptRenderer(changedRenderer.source),/already patched/);global.gc?.();
 assert.throws(()=>adaptGrouping(group+'\nfunction fake(y){if(!y?.isSearchOrReadCommand)return{isCollapsible:!1};}'),/got 2/);
@@ -254,6 +280,17 @@ for(const kind of [undefined,'permission-rule','automode-blocked']){
   assert.equal(active,kind!==undefined);
 }
 console.log('PASS: failed compact previews are hidden, success/pending previews and original results remain intact, native denial indicators remain visible');
+
+const pendingJSX=previewSource.match(/:v\?(\w+)\((\w+),\{children:\1\((\w+),/);assert(pendingJSX);
+for(const [name,label] of Object.entries({Write:'Writing…',Edit:'Editing…',NotebookEdit:'Editing notebook…',WebFetch:'Fetching…',WebSearch:'Searching…'})){
+  const props={content:{id:'streamed',name,input:{}},tools:[],columns:80,fallback:'old thinking',lookups:{progressMessagesByToolUseID:new Map,toolResultByToolUseID:new Map}};
+  const value=vm.runInNewContext('('+previewSource+')(props)',{props,[pendingJSX[1]]:(type,props)=>props,[pendingJSX[2]]:'native-indent',[pendingJSX[3]]:'native-text'});
+  assert.equal(value.children.children,label);
+  props.content.input={file_path:'complete.py'};
+  const full=vm.runInNewContext('('+previewSource+')(props)',{props,[pendingJSX[1]]:(type,props)=>props,[pendingJSX[2]]:'native-indent',[pendingJSX[3]]:'native-text'});
+  assert.equal(JSON.stringify(full),JSON.stringify(value));
+}
+console.log('PASS: streamed and complete file/web inputs show the same pending verb, never an empty call or unrelated thinking');
 
 const quietTask=adaptRenderer(render).changes.find(c=>c.reason.startsWith('Hide failed native task')).after;
 const taskNames=quietTask.match(/if\((\w+)==="failed"&&!(\w+)&&!(\w+)\)/);

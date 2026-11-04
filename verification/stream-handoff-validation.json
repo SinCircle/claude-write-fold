@@ -1,0 +1,51 @@
+{
+  "revision": "15-stream-handoff",
+  "nativeVersion": "2.1.316",
+  "changedFromV019": [
+    "B:/~BUN/root/chunk-wdaanm8n.js",
+    "B:/~BUN/root/chunk-mwqzkre7.js",
+    "B:/~BUN/root/chunk-9dzvs2vf.js"
+  ],
+  "changedKinds": [
+    "grouping",
+    "renderer",
+    "focus"
+  ],
+  "clockUnchanged": true,
+  "diagnosticCodeAbsent": true,
+  "finalBuildMatchesTerminalTestedCandidate": true,
+  "streamingFixture": {
+    "tools": [
+      "Write",
+      "Edit",
+      "Edit",
+      "Read"
+    ],
+    "charactersPerDelta": 40,
+    "intervalMs": 60,
+    "baselineSelectionRegressions": 4,
+    "fixedSelectionRegressions": 0,
+    "candidateFramesThroughFirstFinal": 308,
+    "emptyCallOrThinkingReappearance": false
+  },
+  "interrupt": {
+    "interruptedWhileEditing": true,
+    "pendingClearedOnStop": true,
+    "conversationClearRemovedHeldState": true
+  },
+  "terminalCases": [
+    "STREAMEDIT",
+    "STREAMEDIT interrupted during pending Edit",
+    "WEBONLY",
+    "WEBMIXED"
+  ],
+  "structuralAndLogicVersions": [
+    "2.1.311",
+    "2.1.316"
+  ],
+  "limits": [
+    "Controlled local API fixture; no paid model call",
+    "Native terminal validation on 2.1.316 only",
+    "WebSearch uses synthetic API results; not live search-provider verification"
+  ]
+}
