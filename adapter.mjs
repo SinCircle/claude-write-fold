@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import {parse, tokenizer} from './vendor/acorn.mjs';
 
-export const revision = '15-stream-handoff';
+export const revision = '16-native-322';
 // Preserve the established grouping and preview markers.
 const marker = '/* write-fold:8-background-failure */';
 const options = {ecmaVersion:'latest',sourceType:'module'};
@@ -29,7 +29,7 @@ class Editor {
     const candidates=this.functions.filter(n=>n.start<=at&&n.end>at).sort((a,b)=>(a.end-a.start)-(b.end-b.start));
     insist(candidates.length,this.label+': enclosing function missing');return candidates[0];
   }
-  match(template,names='',scope=null,seed={}){
+  find(template,names='',scope=null,seed={}){
     const pattern=lex(template),variable=new Set(names.split(/\s+/).filter(Boolean));
     const hits=[],start=scope?.start??0,end=scope?.end??this.source.length;
     for(let i=0;i<=this.tokens.length-pattern.length;i++){
@@ -46,6 +46,10 @@ class Editor {
       }
       if(good)hits.push({start:first.start,end:this.tokens[i+pattern.length-1].end,b:bindings});
     }
+    return hits;
+  }
+  match(template,names='',scope=null,seed={}){
+    const hits=this.find(template,names,scope,seed);
     insist(hits.length===1,`${this.label}: expected one structural match, got ${hits.length}: ${template.slice(0,100)}`);
     return hits[0];
   }
@@ -74,7 +78,10 @@ function addBackgroundGrouping(ed){
   ed.add(hit.start,hit.start,`else if(${state}.bashCommands?.has(__wfBackgroundTask(${message})?.toolUseId)){${state}.__wfBackgroundTasks??=[];${state}.__wfBackgroundTasks.push(${message});}`,'Absorb completion only when its original command belongs to this group');
   const flush=ed.match('if(n){if((e.bashCount??0)>0)Q.bashCount=','n e Q');
   ed.add(flush.start,flush.start,`if(${flush.b.e}.__wfBackgroundTasks?.length)${flush.b.Q}.__wfBackgroundTasks=${flush.b.e}.__wfBackgroundTasks;`,'Carry original notifications separately from native tool messages');
-  const merge=ed.match('e.latestThinkingSummary=n.latestThinkingSummary??e.latestThinkingSummary,e.messages.push(...n.messages)','e n');
+  const mergeState=ed.match('e.latestThinkingSummary=n.latestThinkingSummary??e.latestThinkingSummary','e n');
+  // Newer native builds propagate stopShownAfter between these two operations.
+  // Anchor both inside the same merge function and leave that native logic intact.
+  const merge=ed.match('e.messages.push(...n.messages)','e n',ed.fn(mergeState.start),mergeState.b);
   ed.add(merge.end,merge.end,`;if(${merge.b.n}.__wfBackgroundTasks?.length)${merge.b.e}.__wfBackgroundTasks=[...${merge.b.e}.__wfBackgroundTasks??[],...${merge.b.n}.__wfBackgroundTasks]`,'Preserve attached notifications when native brief mode merges groups');
 }
 
@@ -270,13 +277,24 @@ export function adaptRenderer(source){
   insist(fn.type==='FunctionDeclaration','group component is no longer a named function');
   const K=ed.match('{columns:K}=Ce()','K Ce',fn).b.K;
   const Bt=ed.match('Bt(d).filter(BN)','Bt d BN',fn,{d}).b.Bt;
-  const l3=ed.match('l3.isInterruptedCall(b.toolResultByToolUseID.get(dj.id))','l3 b dj',fn,{b}).b.l3;
+  // Native builds may call the same interruption helper from several branches.
+  // Resolve its binding, not a particular call site; conflicting helpers fail.
+  const interruptionHelpers=new Set;
+  walk(fn.body,node=>{
+    if(node.type!=='CallExpression'||node.callee?.type!=='MemberExpression'||node.callee.computed||node.callee.property.name!=='isInterruptedCall'||node.callee.object.type!=='Identifier'||node.arguments.length!==1)return;
+    const lookup=node.arguments[0];
+    if(lookup.type!=='CallExpression'||lookup.callee?.type!=='MemberExpression'||lookup.callee.computed||lookup.callee.property.name!=='get'||lookup.arguments.length!==1)return;
+    const map=lookup.callee.object;
+    if(map.type==='MemberExpression'&&!map.computed&&map.object.type==='Identifier'&&map.object.name===b&&map.property.name==='toolResultByToolUseID')interruptionHelpers.add(node.callee.object.name);
+  });
+  insist(interruptionHelpers.size===1,'Native interruption helper binding is missing or ambiguous');
+  const [l3]=interruptionHelpers;
   // Hint throttling stays native within one tool. A new tool identity resets
   // the value during render, so leaving a preview cannot expose an old hint.
-  const hintCall=ed.match('let u1=ug(bs,_x),iT,ko=M&&d.isLiveBriefTurn===!0','u1 ug bs _x iT ko M d',fn,{M,d});
-  const hintFn=ed.functions.find(n=>n.type==='FunctionDeclaration'&&n.id?.name===hintCall.b.ug);
-  insist(hintFn?.params.length===2,'Native detail throttle changed');
-  const hintState=ed.match('let c=yn(),[g,f]=y(m),h=A(0);','c yn g f y m h A',hintFn,{m:hintFn.params[0].name});
+  const hintState=ed.match('let c=yn(),[g,f]=y(m),h=A(0);','c yn g f y m h A');
+  const hintFn=ed.fn(hintState.start);
+  insist(hintFn.type==='FunctionDeclaration'&&hintFn.params.length===2&&hintFn.params[0].name===hintState.b.m,'Native detail throttle changed');
+  const hintCall=ed.match('let u1=ug(bs,_x)','u1 ug bs _x',fn,{ug:hintFn.id.name});
   const hintExpr=ed.match('ug(bs,_x)','ug bs _x',hintCall,hintCall.b);
   ed.add(hintFn.params[1].end,hintFn.params[1].end,',__wfIdentity','Give the native detail throttle its tool identity');
   ed.add(hintExpr.end-1,hintExpr.end-1,`,${Bt}(${d}).at(-1)?.id`,'Use the same latest tool identity for hint and preview');
@@ -286,7 +304,12 @@ export function adaptRenderer(source){
   const errorState=ed.match('ae=ee.some((ge)=>b.erroredToolUseIDs.has(ge)&&le?.has(ge)!==!0)','ae ee ge b le',fn,{b});
   const errorCheck=ed.match('b.erroredToolUseIDs.has(ge)','b ge',errorState,{b,ge:errorState.b.ge});
   ed.add(errorCheck.end,errorCheck.end,`&&${b}.toolResultByToolUseID.get(${errorState.b.ge})?.toolDenialKind!==void 0`,'Keep ordinary grouped tool failures out of the compact error indicator');
-  const live=ed.match('Pm=M&&Vt===null&&Ea!==void 0&&r(s,{flexDirection:"row",children:','Pm M Vt Ea r s',fn,{M});
+  const liveAnchors=[
+    ...ed.find('Pm=M&&Vt===null&&download===void 0&&Ea!==void 0&&r(s,{flexDirection:"row",children:','Pm M Vt download Ea r s',fn,{M}),
+    ...ed.find('Pm=M&&Vt===null&&Ea!==void 0&&r(s,{flexDirection:"row",children:','Pm M Vt Ea r s',fn,{M}),
+  ];
+  insist(liveAnchors.length===1,'Native live-detail assignment is missing or ambiguous');
+  const [live]=liveAnchors;
   const Pm=live.b.Pm;
   let memo=[];
   walk(fn.body,n=>{
@@ -299,7 +322,7 @@ export function adaptRenderer(source){
   const pending=ed.match('case"query_update":return e(Ge,{children:r(n,{dimColor:!0,children:["Searching: ",c.query]})})','e Ge r n c').b;
   const helper=`${marker}function __writeFoldPreview(m){let{content:d,tools:h,lookups:b,columns:K}=m,p=b.progressMessagesByToolUseID.get(d.id)??[],u=b.toolResultByToolUseID.get(d.id),t=u?.type==="user"?u.message.content.find(v=>v.type==="tool_result"&&v.tool_use_id===d.id):void 0,v={Write:"Writing…",Edit:"Editing…",NotebookEdit:"Editing notebook…",WebFetch:"Fetching…",WebSearch:"Searching…"}[d.name];return t?.is_error?null:t?${result.e}(${result.qd},{param:t,message:u,lookups:b,progressMessagesForMessage:p,tools:h,verbose:!1,width:Math.max(1,K-5),isTranscriptMode:!1}):v?${pending.e}(${pending.Ge},{children:${pending.e}(${pending.n},{dimColor:!0,children:v})}):m.fallback}`;
   ed.add(fn.start,fn.start,helper,'Add a result-preview-only component; no ToolUse title');
-  const inject=`let __wfLast=${M}?${Bt}(${d}).at(-1):void 0;if(__wfLast&&(__wfLast.id===${d}.__wfLatestFileWriteId||["WebFetch","WebSearch"].includes(__wfLast.name))&&!${l3}.isInterruptedCall(${b}.toolResultByToolUseID.get(__wfLast.id)))${Pm}=${result.e}(__writeFoldPreview,{content:__wfLast,tools:${h},lookups:${b},columns:${K},fallback:${Pm}},__wfLast.id);`;
+  const inject=`let __wfLast=${M}?${Bt}(${d}).at(-1):void 0;if(__wfLast&&${live.b.download?`${live.b.download}===void 0&&`:''}(__wfLast.id===${d}.__wfLatestFileWriteId||["WebFetch","WebSearch"].includes(__wfLast.name))&&!${l3}.isInterruptedCall(${b}.toolResultByToolUseID.get(__wfLast.id)))${Pm}=${result.e}(__writeFoldPreview,{content:__wfLast,tools:${h},lookups:${b},columns:${K},fallback:${Pm}},__wfLast.id);`;
   ed.add(memo[0].end,memo[0].end,inject,'Replace only active detail content; preserve every native title expression');
   const taskProps=ed.match('{addMargin:d,summary:c,monitorEvent:g,status:f,durationMs:h,taskDelivery:M,messageId:T,verbose:v,isExpanded:x}=m','d c g f h M T v x m');
   const taskFn=ed.fn(taskProps.start),taskBranch=ed.match('if(g!==null&&!x){','g x',taskFn,{g:taskProps.b.g,x:taskProps.b.x});

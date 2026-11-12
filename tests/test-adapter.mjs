@@ -119,10 +119,19 @@ console.log('PASS: duplicate patches, ambiguous matches and structural drift are
 // now byte-identical to upstream: no special prop, ref policy or remount key.
 const patched=adaptRenderer(render).source;
 const patchedAst=parse(patched,options),nativeAst=parse(render,options);
-const indicator=patchedAst.body.find(n=>n.type==='FunctionDeclaration'&&n.params[0]?.type==='ObjectPattern'&&n.params[0].properties.some(p=>p.key?.name==='isUnresolved')&&n.params[0].properties.some(p=>p.key?.name==='shouldAnimate'));
+const isIndicator=n=>n.type==='FunctionDeclaration'&&n.params[0]?.type==='ObjectPattern'&&n.params[0].properties.some(p=>p.key?.name==='isUnresolved')&&n.params[0].properties.some(p=>p.key?.name==='shouldAnimate');
+const externalIndicator=!patchedAst.body.some(isIndicator);
+const indicatorBefore=externalIndicator?fs.readFileSync(process.argv[6],'utf8'):render;
+const indicatorAfter=externalIndicator?indicatorBefore:patched;
+const indicator=parse(indicatorAfter,options).body.find(isIndicator);
 assert(indicator);assert(!patched.includes('__wfLiveGroup'));
-const original=nativeAst.body.find(n=>n.type==='FunctionDeclaration'&&n.id.name===indicator.id.name);
-assert.equal(patched.slice(indicator.start,indicator.end),render.slice(original.start,original.end));
+const original=parse(indicatorBefore,options).body.find(n=>n.type==='FunctionDeclaration'&&n.id.name===indicator.id.name);
+if(externalIndicator){
+  const binding=nativeAst.body.find(n=>n.type==='ImportDeclaration'&&n.specifiers.some(s=>s.local.name===indicator.id.name));
+  assert(binding,'The native renderer must import the validated indicator');
+  assert(patched.includes(render.slice(binding.start,binding.end)),'The native indicator import must be preserved');
+}
+assert.equal(indicatorAfter.slice(indicator.start,indicator.end),indicatorBefore.slice(original.start,original.end));
 const declarations=original.body.body[0].declarations;
 assert.equal(declarations.length,6);
 const sequence=original.body.body.at(-1).argument;
@@ -152,8 +161,8 @@ function renderIndicator(node,code,props,staticFrame,reducedMotion,phase){
 for(let flags=0;flags<128;flags++){
   const props={isError:!!(flags&1),isNeutral:!!(flags&2),isUnresolved:!!(flags&4),shouldAnimate:!!(flags&8)};
   const environment=[!!(flags&16),!!(flags&32),!!(flags&64)];
-  const before=renderIndicator(original,render,props,...environment);
-  const after=renderIndicator(indicator,patched,props,...environment);
+  const before=renderIndicator(original,indicatorBefore,props,...environment);
+  const after=renderIndicator(indicator,indicatorAfter,props,...environment);
   assert.equal(after.tree.props.ref,visibilityRef);
   assert.equal(after.animationEnabled,before.animationEnabled);
   assert.equal(JSON.stringify(after.tree),JSON.stringify(before.tree));
